@@ -1,14 +1,109 @@
 import streamlit as st
 import pandas as pd
-from db_handler import get_all_employees, add_employee, update_employee, get_employee_by_id, search_employees
+import psycopg2
+
+# ─────────────── DB Handler Functions ───────────────
+
+def get_connection():
+    # You can adjust these to match your Streamlit secrets or config
+    conn = psycopg2.connect(
+        host=st.secrets["db_host"],
+        database=st.secrets["db_name"],
+        user=st.secrets["db_user"],
+        password=st.secrets["db_password"],
+        port=st.secrets.get("db_port", 5432)
+    )
+    return conn
+
+def get_all_employees():
+    conn = get_connection()
+    df = pd.read_sql("SELECT * FROM hr_employee ORDER BY employeeid DESC", conn)
+    conn.close()
+    return df
+
+def add_employee(
+    fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
+    address, date_of_birth, employment_date, basicsalary, health_condition,
+    cv_url, national_id_image_url, national_id_no, email, family_members,
+    education_degree, language, ss_registration_date, assurance, assurance_state,
+    employee_state, photo_url
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = """
+        INSERT INTO hr_employee (
+            fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
+            address, date_of_birth, employment_date, basicsalary, health_condition,
+            cv_url, national_id_image_url, national_id_no, email, family_members,
+            education_degree, language, ss_registration_date, assurance, assurance_state,
+            employee_state, photo_url
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    cur.execute(sql, (
+        fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
+        address, date_of_birth, employment_date, basicsalary, health_condition,
+        cv_url, national_id_image_url, national_id_no, email, family_members,
+        education_degree, language, ss_registration_date, assurance, assurance_state,
+        employee_state, photo_url
+    ))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def update_employee(
+    employeeid, fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
+    address, date_of_birth, employment_date, basicsalary, health_condition,
+    cv_url, national_id_image_url, national_id_no, email, family_members,
+    education_degree, language, ss_registration_date, assurance, assurance_state,
+    employee_state, photo_url
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    sql = """
+        UPDATE hr_employee SET
+            fullname=%s, department=%s, position=%s, phone_no=%s, emergency_phone_no=%s, supervisor_phone_no=%s,
+            address=%s, date_of_birth=%s, employment_date=%s, basicsalary=%s, health_condition=%s,
+            cv_url=%s, national_id_image_url=%s, national_id_no=%s, email=%s, family_members=%s,
+            education_degree=%s, language=%s, ss_registration_date=%s, assurance=%s, assurance_state=%s,
+            employee_state=%s, photo_url=%s
+        WHERE employeeid=%s
+    """
+    cur.execute(sql, (
+        fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
+        address, date_of_birth, employment_date, basicsalary, health_condition,
+        cv_url, national_id_image_url, national_id_no, email, family_members,
+        education_degree, language, ss_registration_date, assurance, assurance_state,
+        employee_state, photo_url, employeeid
+    ))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def search_employees(term):
+    conn = get_connection()
+    sql = """
+        SELECT * FROM hr_employee
+        WHERE fullname ILIKE %s
+           OR email ILIKE %s
+           OR department ILIKE %s
+           OR phone_no ILIKE %s
+           OR supervisor_phone_no ILIKE %s
+           OR emergency_phone_no ILIKE %s
+        ORDER BY employeeid DESC
+    """
+    search = f"%{term}%"
+    df = pd.read_sql(sql, conn, params=(search, search, search, search, search, search))
+    conn.close()
+    return df
+
+# ─────────────── Streamlit UI ───────────────
 
 st.set_page_config(page_title="Employee Management", page_icon="👥", layout="wide")
-
 st.title("👥 Employee Management")
 
 tabs = st.tabs(["➕ Add Employee", "📝 Edit Employee", "🔎 Search Employees"])
 
-# ----------------------- ADD EMPLOYEE -----------------------
+# ------- Add Employee -------
 with tabs[0]:
     st.header("Add New Employee")
     with st.form("add_employee_form", clear_on_submit=True):
@@ -41,11 +136,10 @@ with tabs[0]:
         
         submitted = st.form_submit_button("Add Employee")
         if submitted:
-            # You will want to handle file uploads (save to S3 or folder, then store URL/path)
-            # Here, we'll just set dummy paths for demo
-            cv_url = "uploaded_cvs/" + cv_file.name if cv_file else None
-            national_id_image_url = "uploaded_ids/" + national_id_image.name if national_id_image else None
-            photo_url = "uploaded_photos/" + photo.name if photo else None
+            # Save uploaded files or handle paths here (now just None for demo)
+            cv_url = cv_file.name if cv_file else None
+            national_id_image_url = national_id_image.name if national_id_image else None
+            photo_url = photo.name if photo else None
 
             add_employee(
                 fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
@@ -56,13 +150,14 @@ with tabs[0]:
             )
             st.success(f"Employee '{fullname}' added successfully!")
 
-# ----------------------- EDIT EMPLOYEE -----------------------
+# ------- Edit Employee -------
 with tabs[1]:
     st.header("Edit Employee")
     all_employees = get_all_employees()
     if not all_employees.empty:
-        selected_emp = st.selectbox("Select employee to edit", all_employees["fullname"] + " (" + all_employees["email"] + ")")
-        emp_row = all_employees[all_employees["fullname"] + " (" + all_employees["email"] + ")" == selected_emp].iloc[0]
+        all_employees["display"] = all_employees["fullname"] + " (" + all_employees["email"] + ")"
+        selected_emp = st.selectbox("Select employee to edit", all_employees["display"])
+        emp_row = all_employees[all_employees["display"] == selected_emp].iloc[0]
         emp_id = emp_row["employeeid"]
         
         with st.form("edit_employee_form"):
@@ -101,11 +196,10 @@ with tabs[1]:
     else:
         st.info("No employees found. Please add employees first.")
 
-# ----------------------- SEARCH EMPLOYEES -----------------------
+# ------- Search Employees -------
 with tabs[2]:
     st.header("Search Employees")
     search_term = st.text_input("Enter name, email, department, or phone:")
-    results = None
     if search_term:
         results = search_employees(search_term)
         if results is not None and not results.empty:
