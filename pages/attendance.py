@@ -107,22 +107,25 @@ with tab_grid:
 </div>
 """, unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────────
-# TAB 2 • Log History   ← only this block changed
-# ──────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
+# TAB 2 • Log History  (replace the old block with everything between the lines)
+# ────────────────────────────────────────────────────────────────
 with tab_history:
     emp_df = list_employees()
     if emp_df.empty:
-        st.warning("No employees found."); st.stop()
+        st.warning("No employees found.")
+        st.stop()
 
     emp_choice = st.selectbox("Select employee", emp_df["fullname"], key="hist_emp")
     emp_row = emp_df[emp_df["fullname"] == emp_choice].iloc[0]
-    emp_id = int(emp_row["employeeid"])          # numpy.int64 → int
+    emp_id = int(emp_row["employeeid"])   # cast fixes numpy.int64
 
     today = datetime.date.today()
     default_start = today.replace(day=1)
-    rng = st.date_input("Date range", (default_start, today), key="hist_rng")
-    start_date, end_date = rng if isinstance(rng, tuple) else (rng[0], rng[1])
+    date_range = st.date_input(
+        "Date range", (default_start, today), key="hist_rng"
+    )
+    start_date, end_date = date_range if isinstance(date_range, tuple) else (date_range[0], date_range[1])
 
     if start_date > end_date:
         st.error("Start date must be before end date.")
@@ -135,41 +138,48 @@ with tab_history:
         st.info("No attendance records for this interval.")
         st.stop()
 
-    # ── summary metrics ──
-    total   = data["hours"].sum()
-    expected= len(data) * SHIFT_HOURS
-    delta   = total - expected
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total hours", f"{total:.2f}")
-    col2.metric("Expected", f"{expected:.1f}")
-    col3.metric("Δ (overtime)", f"{delta:+.2f}", delta if delta else None)
+    # -------- Summary metrics --------
+    total_hours = data["hours"].sum()
+    expected_hours = len(data) * SHIFT_HOURS
+    delta_hours = total_hours - expected_hours
 
-    # ── build styled table ──
-    tbl = data[["punch_date","clock_in","clock_out","net_str","hours"]].rename(
-        columns={"punch_date":"Date","clock_in":"IN","clock_out":"OUT","net_str":"NET","hours":"Hours"}
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total hours", f"{total_hours:.2f}")
+    m2.metric("Expected", f"{expected_hours:.1f}")
+    m3.metric("Δ (overtime)", f"{delta_hours:+.2f}", delta_hours if delta_hours else None)
+
+    # -------- Daily log table --------
+    tbl = data[
+        ["punch_date", "clock_in", "clock_out", "net_str", "hours"]
+    ].rename(
+        columns={
+            "punch_date": "Date",
+            "clock_in": "IN",
+            "clock_out": "OUT",
+            "net_str": "NET",
+            "hours": "Hours",
+        }
     )
     tbl["Hours"] = tbl["Hours"].round(2)
 
-    def style_row(row):
-        style = [""] * len(row)
-        # late if after 08:05
-        late_threshold = datetime.time(8, 5)
+    def colour_row(row):
+        styles = [""] * len(row)
+        # late if IN > 08:05
+        late_cutoff = datetime.time(8, 5)
         in_time = datetime.datetime.strptime(row["IN"], "%H:%M").time()
-        if in_time > late_threshold:
-            style[1] = "background-color:#f8d7da;"      # IN col red
+        if in_time > late_cutoff:
+            styles[1] = "background-color:#f8d7da;"   # IN column (index 1)
         else:
-            style[1] = "background-color:#d1ecf1;"      # IN col blue
+            styles[1] = "background-color:#d1ecf1;"   # on‑time blue
 
+        # hours rule
         if row["Hours"] < SHIFT_HOURS:
-            style[4] = "background-color:#f8d7da;"      # Hours col red
+            styles[-1] = "background-color:#f8d7da;"  # Hours column red
         else:
-            style[4] = "background-color:#d4edda;"      # Hours col green
-        return style
+            styles[-1] = "background-color:#d4edda;"  # Hours column green
+        return styles
 
-    styled = tbl.style.apply(style_row, axis=1)
+    styled_tbl = tbl.style.apply(colour_row, axis=1)
 
-    st.dataframe(styled, use_container_width=True, hide_index=True)
-":"NET","hours":"Hours"}
-            )
-            tbl["Hours"]=tbl["Hours"].map("{:.2f}".format)
-            st.dataframe(tbl, use_container_width=True, hide_index=True)
+    st.dataframe(styled_tbl, use_container_width=True, hide_index=True)
+
