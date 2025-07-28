@@ -5,14 +5,8 @@ import psycopg2
 # ─────────────── DB Handler Functions ───────────────
 
 def get_connection():
-    # You can adjust these to match your Streamlit secrets or config
-    conn = psycopg2.connect(
-        host=st.secrets["db_host"],
-        database=st.secrets["db_name"],
-        user=st.secrets["db_user"],
-        password=st.secrets["db_password"],
-        port=st.secrets.get("db_port", 5432)
-    )
+    import psycopg2
+    conn = psycopg2.connect(st.secrets["neon"]["dsn"])
     return conn
 
 def get_all_employees():
