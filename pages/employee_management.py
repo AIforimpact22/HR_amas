@@ -3,18 +3,18 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import datetime
 
-# ─────────────── SQLAlchemy Engine (cached) ───────────────
-#   st.secrets["neon"]["dsn"]  →  postgresql://user:pwd@host/db?sslmode=...
+# ─────────────── SQLAlchemy engine (cached) ───────────────
 if "pg_engine" not in st.session_state:
     st.session_state.pg_engine = create_engine(
         st.secrets["neon"]["dsn"], pool_pre_ping=True, echo=False
     )
 engine = st.session_state.pg_engine
 
-# ─────────────── CRUD Helper Functions ───────────────
+# ─────────────── CRUD helpers ───────────────
 def get_all_employees():
-    sql = "SELECT * FROM hr_employee ORDER BY employeeid DESC"
-    return pd.read_sql(text(sql), engine)
+    return pd.read_sql(
+        text("SELECT * FROM hr_employee ORDER BY employeeid DESC"), engine
+    )
 
 
 def add_employee(
@@ -140,7 +140,7 @@ def update_employee(
         )
 
 
-def search_employees(term):
+def search_employees(term: str):
     sql = text(
         """
         SELECT * FROM hr_employee
@@ -153,61 +153,59 @@ def search_employees(term):
         ORDER BY employeeid DESC
         """
     )
-    search = f"%{term}%"
-    return pd.read_sql(sql, engine, params={"s": search})
+    return pd.read_sql(sql, engine, params={"s": f"%{term}%"})
 
 
-# ─────────────── Date helpers (30‑year range) ───────────────
-TODAY      = datetime.date.today()
-PAST_30_Y  = TODAY - datetime.timedelta(days=365 * 30)
-FUTURE_30Y = TODAY + datetime.timedelta(days=365 * 30)
+# ─────────────── Date helpers ───────────────
+TODAY = datetime.date.today()
+PAST_30 = TODAY - datetime.timedelta(days=365 * 30)
+FUTURE_30 = TODAY + datetime.timedelta(days=365 * 30)
 
 
-def thirty_year_window(existing: datetime.date | None = None):
-    """Ensure picker always includes stored value."""
+def _window(existing: datetime.date | None):
     if existing:
-        return min(PAST_30_Y, existing), max(FUTURE_30Y, existing)
-    return PAST_30_Y, FUTURE_30Y
+        return min(PAST_30, existing), max(FUTURE_30, existing)
+    return PAST_30, FUTURE_30
 
 
-# ─────────────── Streamlit UI ───────────────
+# ─────────────── UI ───────────────
 st.set_page_config(page_title="Employee Management", page_icon="👥", layout="wide")
 st.title("👥 Employee Management")
 
-tabs = st.tabs(["➕ Add Employee", "📝 Edit Employee", "🔎 Search Employees"])
+tab_add, tab_edit, tab_search = st.tabs(["➕ Add Employee", "📝 Edit Employee", "🔎 Search"])
 
-# ------- Add Employee -------
-with tabs[0]:
+# ---------- ADD ----------
+with tab_add:
     st.header("Add New Employee")
     with st.form("add_emp", clear_on_submit=True):
-        col1, col2 = st.columns(2)
+        c1, c2 = st.columns(2)
 
-        with col1:
-            fullname              = st.text_input("Full Name", max_chars=100)
-            department            = st.text_input("Department")
-            position              = st.text_input("Position")
-            phone_no              = st.text_input("Phone No.", max_chars=20)
-            emergency_phone_no    = st.text_input("Emergency Phone No.", max_chars=20)
-            supervisor_phone_no   = st.text_input("Supervisor Phone No.", max_chars=20)
-            address               = st.text_area("Address")
-            date_of_birth         = st.date_input("Date of Birth", min_value=PAST_30_Y, max_value=FUTURE_30Y)
-            employment_date       = st.date_input("Employment Date", min_value=PAST_30_Y, max_value=FUTURE_30Y)
-            basicsalary           = st.number_input("Basic Salary", min_value=0.0, step=1000.0)
-            health_condition      = st.text_input("Health Condition")
-            family_members        = st.number_input("Family Members", min_value=0)
-            education_degree      = st.text_input("Education Degree")
-            language              = st.text_input("Languages (comma separated)")
+        with c1:
+            fullname = st.text_input("Full Name", max_chars=100)
+            department = st.text_input("Department")
+            position = st.text_input("Position")
+            phone_no = st.text_input("Phone No.", max_chars=20)
+            emergency_phone_no = st.text_input("Emergency Phone No.", max_chars=20)
+            supervisor_phone_no = st.text_input("Supervisor Phone No.", max_chars=20)
+            address = st.text_area("Address")
+            date_of_birth = st.date_input("Date of Birth", min_value=PAST_30, max_value=FUTURE_30)
+            employment_date = st.date_input("Employment Date", min_value=PAST_30, max_value=FUTURE_30)
+            basicsalary = st.number_input("Basic Salary", min_value=0.0, step=1000.0)
+            health_condition = st.text_input("Health Condition")
+            family_members = st.number_input("Family Members", min_value=0)
+            education_degree = st.text_input("Education Degree")
+            language = st.text_input("Languages")
 
-        with col2:
-            cv_file              = st.file_uploader("CV (PDF)", type=["pdf"])
-            national_id_image    = st.file_uploader("National ID (image)", type=["jpg", "jpeg", "png"])
-            national_id_no       = st.number_input("National ID Number", min_value=0)
-            email                = st.text_input("Email")
-            ss_registration_date = st.date_input("Social Security Registration Date", min_value=PAST_30_Y, max_value=FUTURE_30Y)
-            assurance            = st.number_input("Assurance", min_value=0.0, step=1000.0)
-            assurance_state      = st.selectbox("Assurance State", ["active", "repaid"])
-            employee_state       = st.selectbox("Employee State", ["active", "resigned", "terminated"])
-            photo                = st.file_uploader("Photo", type=["jpg", "jpeg", "png"])
+        with c2:
+            cv_file = st.file_uploader("CV (PDF)", type=["pdf"])
+            national_id_image = st.file_uploader("National ID (image)", type=["jpg", "jpeg", "png"])
+            national_id_no = st.number_input("National ID Number", min_value=0)
+            email = st.text_input("Email")
+            ss_registration_date = st.date_input("SS Registration Date", min_value=PAST_30, max_value=FUTURE_30)
+            assurance = st.number_input("Assurance", min_value=0.0, step=1000.0)
+            assurance_state = st.selectbox("Assurance State", ["active", "repaid"])
+            employee_state = st.selectbox("Employee State", ["active", "resigned", "terminated"])
+            photo = st.file_uploader("Photo", type=["jpg", "jpeg", "png"])
 
         if st.form_submit_button("Add Employee"):
             add_employee(
@@ -221,62 +219,90 @@ with tabs[0]:
             )
             st.success(f"Employee **{fullname}** added!")
 
-# ------- Edit Employee -------
-with tabs[1]:
+# ---------- EDIT ----------
+with tab_edit:
     st.header("Edit Employee")
-    df_all = get_all_employees()
+    df = get_all_employees()
 
-    if df_all.empty:
-        st.info("No employees found.")
+    if df.empty:
+        st.info("No employees yet.")
     else:
-        df_all["disp"] = df_all["fullname"] + " (" + df_all["email"] + ")"
-        choice = st.selectbox("Select employee", df_all["disp"])
-        row    = df_all[df_all["disp"] == choice].iloc[0]
-        emp_id = row["employeeid"]
+        df["disp"] = df["fullname"] + " (" + df["email"] + ")"
+        sel = st.selectbox("Choose employee", df["disp"])
+        r = df[df["disp"] == sel].iloc[0]
+        eid = r["employeeid"]
 
-        dob_val = pd.to_datetime(row["date_of_birth"]).date()
-        emp_val = pd.to_datetime(row["employment_date"]).date()
-        ss_val  = pd.to_datetime(row["ss_registration_date"]).date()
+        dob = pd.to_datetime(r["date_of_birth"]).date()
+        empd = pd.to_datetime(r["employment_date"]).date()
+        ssd = pd.to_datetime(r["ss_registration_date"]).date()
 
-        dob_min, dob_max = thirty_year_window(dob_val)
-        emp_min, emp_max = thirty_year_window(emp_val)
-        ss_min,  ss_max  = thirty_year_window(ss_val)
+        dob_min, dob_max = _window(dob)
+        emp_min, emp_max = _window(empd)
+        ss_min, ss_max = _window(ssd)
 
         with st.form("edit_emp"):
-            fullname            = st.text_input("Full Name", row["fullname"])
-            department          = st.text_input("Department", row["department"])
-            position            = st.text_input("Position", row["position"])
-            phone_no            = st.text_input("Phone No.", row["phone_no"])
-            emergency_phone_no  = st.text_input("Emergency Phone No.", row["emergency_phone_no"])
-            supervisor_phone_no = st.text_input("Supervisor Phone No.", row["supervisor_phone_no"])
-            address             = st.text_area("Address", row["address"])
-            date_of_birth       = st.date_input("Date of Birth", dob_val, dob_min, dob_max)
-            employment_date     = st.date_input("Employment Date", emp_val, emp_min, emp_max)
-            basicsalary         = st.number_input("Basic Salary", float(row["basicsalary"]), min_value=0.0, step=1000.0)
-            health_condition    = st.text_input("Health Condition", row["health_condition"])
-            family_members      = st.number_input("Family Members", int(row["family_members"]), min_value=0)
-            education_degree    = st.text_input("Education Degree", row["education_degree"])
-            language            = st.text_input("Languages", row["language"])
-            national_id_no      = st.number_input("National ID Number", int(row["national_id_no"]), min_value=0)
-            email               = st.text_input("Email", row["email"])
-            ss_registration_date = st.date_input("Social Security Registration Date", ss_val, ss_min, ss_max)
-            assurance           = st.number_input("Assurance", float(row["assurance"]), min_value=0.0, step=1000.0)
-            assurance_state     = st.selectbox("Assurance State", ["active", "repaid"], index=["active", "repaid"].index(row["assurance_state"]))
-            employee_state      = st.selectbox("Employee State", ["active", "resigned", "terminated"], index=["active", "resigned", "terminated"].index(row["employee_state"]))
+            fullname = st.text_input("Full Name", r["fullname"])
+            department = st.text_input("Department", r["department"])
+            position = st.text_input("Position", r["position"])
+            phone_no = st.text_input("Phone No.", r["phone_no"])
+            emergency_phone_no = st.text_input("Emergency Phone No.", r["emergency_phone_no"])
+            supervisor_phone_no = st.text_input("Supervisor Phone No.", r["supervisor_phone_no"])
+            address = st.text_area("Address", r["address"])
+            date_of_birth = st.date_input("Date of Birth", dob, dob_min, dob_max)
+            employment_date = st.date_input("Employment Date", empd, emp_min, emp_max)
+            basicsalary = st.number_input(
+                "Basic Salary",
+                value=float(r["basicsalary"]),
+                min_value=0.0,
+                step=1000.0,
+            )
+            health_condition = st.text_input("Health Condition", r["health_condition"])
+            family_members = st.number_input(
+                "Family Members",
+                value=int(r["family_members"]),
+                min_value=0,
+            )
+            education_degree = st.text_input("Education Degree", r["education_degree"])
+            language = st.text_input("Languages", r["language"])
+            national_id_no = st.number_input(
+                "National ID Number",
+                value=int(r["national_id_no"]),
+                min_value=0,
+            )
+            email = st.text_input("Email", r["email"])
+            ss_registration_date = st.date_input(
+                "SS Registration Date", ssd, ss_min, ss_max
+            )
+            assurance = st.number_input(
+                "Assurance",
+                value=float(r["assurance"]),
+                min_value=0.0,
+                step=1000.0,
+            )
+            assurance_state = st.selectbox(
+                "Assurance State",
+                ["active", "repaid"],
+                index=["active", "repaid"].index(r["assurance_state"]),
+            )
+            employee_state = st.selectbox(
+                "Employee State",
+                ["active", "resigned", "terminated"],
+                index=["active", "resigned", "terminated"].index(r["employee_state"]),
+            )
 
             if st.form_submit_button("Update Employee"):
                 update_employee(
-                    emp_id, fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
+                    eid, fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
                     address, date_of_birth, employment_date, basicsalary, health_condition,
-                    row["cv_url"], row["national_id_image_url"], national_id_no, email, family_members,
-                    education_degree, language, ss_registration_date, assurance, assurance_state, employee_state,
-                    row["photo_url"]
+                    r["cv_url"], r["national_id_image_url"], national_id_no, email, family_members,
+                    education_degree, language, ss_registration_date, assurance,
+                    assurance_state, employee_state, r["photo_url"]
                 )
                 st.success(f"Employee **{fullname}** updated!")
 
-# ------- Search Employees -------
-with tabs[2]:
+# ---------- SEARCH ----------
+with tab_search:
     st.header("Search Employees")
-    query = st.text_input("Name, email, department, or phone:")
-    data  = search_employees(query) if query else get_all_employees()
+    q = st.text_input("Search (name, email, dept, phone)")
+    data = search_employees(q) if q else get_all_employees()
     st.dataframe(data)
