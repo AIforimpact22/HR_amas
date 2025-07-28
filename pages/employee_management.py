@@ -4,14 +4,12 @@ from sqlalchemy import create_engine, text
 import datetime
 import os
 
-# ─────────────── SQLAlchemy engine (cached) ───────────────
 if "pg_engine" not in st.session_state:
     st.session_state.pg_engine = create_engine(
         st.secrets["neon"]["dsn"], pool_pre_ping=True, echo=False
     )
 engine = st.session_state.pg_engine
 
-# ─────────────── CRUD helpers ───────────────
 def get_all_employees():
     return pd.read_sql(
         text("SELECT * FROM hr_employee ORDER BY employeeid DESC"), engine
@@ -201,7 +199,6 @@ with tab_add:
             photo = st.file_uploader("Photo", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("Add Employee")
         if submitted:
-            # --- Required field validation ---
             required_errors = []
             if not fullname.strip():
                 required_errors.append("Full Name")
@@ -283,13 +280,11 @@ with tab_edit:
                 ["active", "resigned", "terminated"],
                 index=["active", "resigned", "terminated"].index(r["employee_state"]),
             )
-            # --- Editable attachments
             st.markdown("**Attachments (leave blank to keep old):**")
             cv_file = st.file_uploader("CV (PDF)", type=["pdf"], key=f"edit_cv_{eid}")
             national_id_image = st.file_uploader("National ID (image)", type=["jpg", "jpeg", "png"], key=f"edit_id_{eid}")
             photo = st.file_uploader("Photo", type=["jpg", "jpeg", "png"], key=f"edit_photo_{eid}")
 
-            # Use new file if uploaded, else keep old
             cv_url = cv_file.name if cv_file else r["cv_url"]
             national_id_image_url = national_id_image.name if national_id_image else r["national_id_image_url"]
             photo_url = photo.name if photo else r["photo_url"]
@@ -312,22 +307,32 @@ with tab_search:
     if data.empty:
         st.info("No records found.")
     else:
-        # Show with attachment preview
         for idx, row in data.iterrows():
             with st.expander(f"{row['fullname']} — {row['position']}"):
                 cols = st.columns([1,2])
                 with cols[0]:
-                    # Show photo if available
+                    # Only show photo if it exists and is a URL (not a local filename)
                     if row['photo_url']:
-                        st.image(f"{row['photo_url']}", caption="Photo", width=120)
+                        # If it's a full URL (starts with http), show; else, just print the name.
+                        if str(row['photo_url']).lower().startswith("http"):
+                            st.image(row['photo_url'], caption="Photo", width=120)
+                        else:
+                            st.write(f"Photo filename: {row['photo_url']}")
+                    else:
+                        st.write("No photo available.")
                 with cols[1]:
                     st.write(f"**Department:** {row['department']}  \n**Phone:** {row['phone_no']}  \n**Email:** {row['email']}")
                     st.write(f"**Employment Date:** {row['employment_date']}  \n**Salary:** {row['basicsalary']}")
                     st.write(f"**State:** {row['employee_state']}  \n**Assurance:** {row['assurance']} ({row['assurance_state']})")
                     st.write(f"**Languages:** {row['language']}")
-                # CV
+                # CV and National ID download links (only if it's a full URL)
                 if row['cv_url']:
-                    st.markdown(f"[📄 Download CV]({row['cv_url']})")
-                # National ID
+                    if str(row['cv_url']).lower().startswith("http"):
+                        st.markdown(f"[📄 Download CV]({row['cv_url']})")
+                    else:
+                        st.write(f"CV filename: {row['cv_url']}")
                 if row['national_id_image_url']:
-                    st.markdown(f"[🪪 National ID]({row['national_id_image_url']})")
+                    if str(row['national_id_image_url']).lower().startswith("http"):
+                        st.markdown(f"[🪪 National ID]({row['national_id_image_url']})")
+                    else:
+                        st.write(f"National ID image: {row['national_id_image_url']}")
