@@ -181,16 +181,16 @@ with tab_add:
         c1, c2 = st.columns(2)
 
         with c1:
-            fullname = st.text_input("Full Name", max_chars=100)
+            fullname = st.text_input("Full Name *", max_chars=100)
             department = st.text_input("Department")
             position = st.text_input("Position")
             phone_no = st.text_input("Phone No.", max_chars=20)
             emergency_phone_no = st.text_input("Emergency Phone No.", max_chars=20)
             supervisor_phone_no = st.text_input("Supervisor Phone No.", max_chars=20)
             address = st.text_area("Address")
-            date_of_birth = st.date_input("Date of Birth", min_value=PAST_30, max_value=FUTURE_30)
-            employment_date = st.date_input("Employment Date", min_value=PAST_30, max_value=FUTURE_30)
-            basicsalary = st.number_input("Basic Salary", min_value=0.0, step=1000.0)
+            date_of_birth = st.date_input("Date of Birth *", min_value=PAST_30, max_value=FUTURE_30)
+            employment_date = st.date_input("Employment Date *", min_value=PAST_30, max_value=FUTURE_30)
+            basicsalary = st.number_input("Basic Salary *", min_value=0.0, step=1000.0)
             health_condition = st.text_input("Health Condition")
             family_members = st.number_input("Family Members", min_value=0)
             education_degree = st.text_input("Education Degree")
@@ -207,18 +207,31 @@ with tab_add:
             employee_state = st.selectbox("Employee State", ["active", "resigned", "terminated"])
             photo = st.file_uploader("Photo", type=["jpg", "jpeg", "png"])
 
-        if st.form_submit_button("Add Employee"):
-            add_employee(
-                fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
-                address, date_of_birth, employment_date, basicsalary, health_condition,
-                cv_file.name if cv_file else None,
-                national_id_image.name if national_id_image else None,
-                national_id_no, email, family_members, education_degree, language,
-                ss_registration_date, assurance, assurance_state, employee_state,
-                photo.name if photo else None,
-            )
-            st.success(f"Employee **{fullname}** added!")
-
+        submitted = st.form_submit_button("Add Employee")
+        if submitted:
+            # --- Required field validation ---
+            required_errors = []
+            if not fullname.strip():
+                required_errors.append("Full Name")
+            if not date_of_birth:
+                required_errors.append("Date of Birth")
+            if not employment_date:
+                required_errors.append("Employment Date")
+            if basicsalary <= 0:
+                required_errors.append("Basic Salary (must be greater than 0)")
+            if required_errors:
+                st.error("Please fill these required fields: " + ", ".join(required_errors))
+            else:
+                add_employee(
+                    fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
+                    address, date_of_birth, employment_date, basicsalary, health_condition,
+                    cv_file.name if cv_file else None,
+                    national_id_image.name if national_id_image else None,
+                    national_id_no, email, family_members, education_degree, language,
+                    ss_registration_date, assurance, assurance_state, employee_state,
+                    photo.name if photo else None,
+                )
+                st.success(f"Employee **{fullname}** added!")
 # ---------- EDIT ----------
 with tab_edit:
     st.header("Edit Employee")
