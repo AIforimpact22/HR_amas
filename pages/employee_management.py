@@ -230,26 +230,29 @@ with tab_edit:
 # ---------- VIEW / SEARCH ----------
 with tab_view:
     q = st.text_input("Search")
+
+    # base employee rows
     data = search_employees(q) if q else get_all_employees()
     if data.empty:
         st.info("No matches.")
         st.stop()
 
-    # ▸ pull current salary for every employee in one query
+    # fetch current base‑salary per employeeid
     sal_df = pd.read_sql(
         """
-        SELECT DISTINCT ON (employeeid) employeeid, salary
+        SELECT employeeid, salary
         FROM   hr_salary_history
-        WHERE  effective_from <= CURRENT_DATE
-          AND  COALESCE(effective_to, DATE '9999-12-31') >= CURRENT_DATE
-        ORDER  BY employeeid, effective_from DESC
+        WHERE  effective_to IS NULL
         """,
         engine,
     )
-    sal_map = dict(zip(sal_df.employeeid, sal_df.salary))
+    current_sal = dict(zip(sal_df.employeeid, sal_df.salary))
 
     for _, r in data.iterrows():
-        current_salary = sal_map.get(r.employeeid, "—")
+        cur_salary = current_sal.get(int(r.employeeid), 0)
+        sal_str = f"{cur_salary:,.0f}"
+        assurance_str = f"{(r.assurance or 0):,.0f}"
+
         with st.expander(f"{r.fullname} — {r.position or '-'}"):
             c1, c2 = st.columns([1, 2])
             with c1:
@@ -262,8 +265,8 @@ with tab_view:
                     f"""
 **Dept:** {r.department or '-'}   **Phone:** {r.phone_no or '-'}   **Email:** {r.email or '-'}  
 **DOB:** {r.date_of_birth}   **Employment:** {r.employment_date}  
-**Salary:** {current_salary}   **State:** {r.employee_state}  
-**Assurance:** {r.assurance} ({r.assurance_state})  
+**Salary:** {sal_str}   **State:** {r.employee_state}  
+**Assurance:** {assurance_str} ({r.assurance_state})  
 **Languages:** {r.language or '-'}
 """
                 )
@@ -283,6 +286,10 @@ with tab_view:
                         "🪪 National ID",
                         data=f,
                         file_name=os.path.basename(r.national_id_image_url),
+                    )
+            elif r.national_id_image_url:
+                st.write("ID image:", os.path.basename(r.national_id_image_url))
+
                     )
             elif r.national_id_image_url:
                 st.write("ID image:", os.path.basename(r.national_id_image_url))
