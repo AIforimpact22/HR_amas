@@ -85,13 +85,17 @@ def close_current_and_insert_raise(eid:int, new_salary:float,
         con.execute(sql_new,
                     {"eid": eid, "sal": new_salary, "eff": eff_from, "rsn": reason})
 
-# ─── UI ────────────────────────────────────────────────────────
+# ────────────────────── UI ───────────────────────────────────────
 st.set_page_config(page_title="Employee Salary", page_icon="💰", layout="wide")
 tab_sum, tab_raise = st.tabs(["📊 Monthly Summary", "➕ Raise / Cut"])
-# ‑‑ stateful month picker (shared)
+
+# keep shared anchor in session_state
 if "pay_anchor" not in st.session_state:
     st.session_state.pay_anchor = datetime.date.today().replace(day=1)
 
+# ================================================================
+# TAB 1  ▸ Monthly Summary (restored “Edit Adj.” per row)
+# ================================================================
 with tab_sum:
     anchor = st.date_input("Payroll month", st.session_state.pay_anchor,
                            key="anchor_sum")
@@ -106,14 +110,15 @@ with tab_sum:
 
     df = fetch_month(start_d, end_d, req_hours)
 
-    # table header
+    # table header  (note: last column = Edit Adj.)
     widths = [2,1.4,1,1,1,1.4,1,1,1.2,2,1]
-    for label, col in zip(
+    for lbl,col in zip(
         ["Employee","Base","Bonus","Extra","Fine","Net",
-         "Worked","Req.","Δ","Reasons",""], st.columns(widths)):
-        col.markdown(f"**{label}**")
+         "Worked","Req.","Δ","Reasons",""],
+        st.columns(widths)):
+        col.markdown(f"**{lbl}**")
 
-    # rows
+    # -------- rows --------
     for _, r in df.iterrows():
         cols = st.columns(widths)
         eid = int(r["employeeid"])
@@ -129,6 +134,25 @@ with tab_sum:
         cols[7].markdown(f"{r['required']:.1f}")
         cols[8].markdown(f"<div style='background:{bg};padding:2px'>{r['delta']:+.1f}</div>", unsafe_allow_html=True)
         cols[9].markdown(r["reasons"] or "—")
+
+        # restored Edit button
+        if cols[-1].button("Edit Adj.", key=f"edit_adj_{eid}"):
+            st.session_state["edit_emp"] = eid
+
+        # inline form for bonus / extra / fine
+        if st.session_state.get("edit_emp") == eid:
+            with st.form(f"adj_form_{eid}"):
+                kind  = st.selectbox("Type", ["bonus","extra","fine"], key=f"k{eid}")
+                amt   = st.number_input("Amount", 0.0, step=1000.0, key=f"a{eid}")
+                rsn   = st.text_area("Reason", key=f"r{eid}")
+                dt    = st.date_input("Date", datetime.date.today(), key=f"d{eid}")
+                sv, cc = st.columns(2)
+                if sv.form_submit_button("Save") and amt>0:
+                    add_txn(eid, dt, amt, kind, rsn)
+                    st.session_state.pop("edit_emp", None)
+                    st.cache_data.clear(); st.rerun()
+                if cc.form_submit_button("Cancel"):
+                    st.session_state.pop("edit_emp", None); st.rerun()
 
     # totals row
     tot = {
