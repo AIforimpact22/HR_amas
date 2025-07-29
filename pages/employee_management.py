@@ -138,57 +138,94 @@ with tab_add:
 
 # ---------- EDIT ----------
 with tab_edit:
-    df=get_all_employees()
+    df = get_all_employees()
     if df.empty:
-        st.info("No employees"); st.stop()
-    df["label"]=df["fullname"]+" ("+df["email"].fillna("-")+")"
-    row=df[df.label==st.selectbox("Select employee",df.label)].iloc[0]
+        st.info("No employees")
+        st.stop()
+
+    df["label"] = df["fullname"] + " (" + df["email"].fillna("-") + ")"
+    row = df[df.label == st.selectbox("Select employee", df.label)].iloc[0]
+    eid = int(row.employeeid)          # ← cast fixes numpy.int64 error
 
     with st.form("edit"):
-        c1,c2 = st.columns(2)
+        c1, c2 = st.columns(2)
         with c1:
-            fullname=st.text_input("Full Name",row.fullname)
-            department=st.text_input("Department",row.department or "")
-            position=st.text_input("Position",row.position or "")
-            phone_no=st.text_input("Phone",row.phone_no or "")
-            emergency_phone_no=st.text_input("Emergency Phone",row.emergency_phone_no or "")
-            supervisor_phone_no=st.text_input("Supervisor Phone",row.supervisor_phone_no or "")
-            address=st.text_area("Address",row.address or "")
-            date_of_birth=st.date_input("DOB",row.date_of_birth,*win(row.date_of_birth))
-            employment_date=st.date_input("Employment Date",row.employment_date,*win(row.employment_date))
+            fullname = st.text_input("Full Name", row.fullname)
+            department = st.text_input("Department", row.department or "")
+            position = st.text_input("Position", row.position or "")
+            phone_no = st.text_input("Phone", row.phone_no or "")
+            emergency_phone_no = st.text_input("Emergency Phone", row.emergency_phone_no or "")
+            supervisor_phone_no = st.text_input("Supervisor Phone", row.supervisor_phone_no or "")
+            address = st.text_area("Address", row.address or "")
+            date_of_birth = st.date_input("DOB", row.date_of_birth, *win(row.date_of_birth))
+            employment_date = st.date_input("Employment Date", row.employment_date, *win(row.employment_date))
 
-            st.number_input("Salary (read‑only – use Raise/Cut page)", value=float(row.basicsalary),
-                            disabled=True)
+            st.number_input(
+                "Salary (read‑only – use Raise/Cut page)",
+                value=float(row.basicsalary),
+                disabled=True,
+            )
 
-            health_condition=st.text_input("Health Condition",row.health_condition or "")
-            family_members=st.number_input("Family Members",value=int(row.family_members or 0),min_value=0)
-            education_degree=st.text_input("Education Degree",row.education_degree or "")
-            language=st.text_input("Languages",row.language or "")
+            health_condition = st.text_input("Health Condition", row.health_condition or "")
+            family_members = st.number_input(
+                "Family Members", value=int(row.family_members or 0), min_value=0
+            )
+            education_degree = st.text_input("Education Degree", row.education_degree or "")
+            language = st.text_input("Languages", row.language or "")
         with c2:
-            national_id_no=st.number_input("National ID No",value=int(row.national_id_no or 0),min_value=0)
-            email=st.text_input("Email",row.email or "")
-            ss_registration_date=st.date_input("SS Registration",row.ss_registration_date,*win(row.ss_registration_date))
-            assurance=st.number_input("Assurance",value=float(row.assurance or 0),min_value=0.0,step=1000.0)
-            assurance_state=st.selectbox("Assurance State",["active","repaid"],index=["active","repaid"].index(row.assurance_state))
-            employee_state=st.selectbox("Employee State",["active","resigned","terminated"],index=["active","resigned","terminated"].index(row.employee_state))
+            national_id_no = st.number_input(
+                "National ID No", value=int(row.national_id_no or 0), min_value=0
+            )
+            email = st.text_input("Email", row.email or "")
+            ss_registration_date = st.date_input(
+                "SS Registration", row.ss_registration_date, *win(row.ss_registration_date)
+            )
+            assurance = st.number_input(
+                "Assurance", value=float(row.assurance or 0), min_value=0.0, step=1000.0
+            )
+            assurance_state = st.selectbox(
+                "Assurance State",
+                ["active", "repaid"],
+                index=["active", "repaid"].index(row.assurance_state),
+            )
+            employee_state = st.selectbox(
+                "Employee State",
+                ["active", "resigned", "terminated"],
+                index=["active", "resigned", "terminated"].index(row.employee_state),
+            )
             st.markdown("*Replace attachments (optional)*")
-            cv_up=st.file_uploader("New CV",type=["pdf"])
-            id_up=st.file_uploader("New ID image",type=["jpg","jpeg","png"])
-            photo_up=st.file_uploader("New Photo",type=["jpg","jpeg","png"])
+            cv_up = st.file_uploader("New CV", type=["pdf"])
+            id_up = st.file_uploader("New ID image", type=["jpg", "jpeg", "png"])
+            photo_up = st.file_uploader("New Photo", type=["jpg", "jpeg", "png"])
+
         if st.form_submit_button("Update"):
             update_employee(
-                row.employeeid,
-                fullname=fullname,department=department,position=position,phone_no=phone_no,
-                emergency_phone_no=emergency_phone_no,supervisor_phone_no=supervisor_phone_no,address=address,
-                date_of_birth=date_of_birth,employment_date=employment_date,
-                health_condition=health_condition,cv_url=save_file(cv_up) or row.cv_url,
+                eid,
+                fullname=fullname,
+                department=department,
+                position=position,
+                phone_no=phone_no,
+                emergency_phone_no=emergency_phone_no,
+                supervisor_phone_no=supervisor_phone_no,
+                address=address,
+                date_of_birth=date_of_birth,
+                employment_date=employment_date,
+                health_condition=health_condition,
+                cv_url=save_file(cv_up) or row.cv_url,
                 national_id_image_url=save_file(id_up) or row.national_id_image_url,
-                national_id_no=national_id_no,email=email,family_members=family_members,
-                education_degree=education_degree,language=language,
-                ss_registration_date=ss_registration_date,assurance=assurance,assurance_state=assurance_state,
-                employee_state=employee_state,photo_url=save_file(photo_up) or row.photo_url
+                national_id_no=national_id_no,
+                email=email,
+                family_members=family_members,
+                education_degree=education_degree,
+                language=language,
+                ss_registration_date=ss_registration_date,
+                assurance=assurance,
+                assurance_state=assurance_state,
+                employee_state=employee_state,
+                photo_url=save_file(photo_up) or row.photo_url,
             )
             st.success("Employee data updated (salary unchanged).")
+
 
 # ---------- VIEW / SEARCH ----------
 with tab_view:
