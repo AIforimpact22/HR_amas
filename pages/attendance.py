@@ -77,7 +77,7 @@ def fetch_day(day: datetime.date) -> pd.DataFrame:
     df["net_str"] = df.secs.apply(lambda s:f"{int(s//3600):02d} h {int((s%3600)//60):02d} m")
     df["late"]    = df.apply(
         lambda r:False if r.expected_in is None else
-        r.clock_in.time() >
+        pd.notna(r.clock_in) and r.clock_in.time() >
         (datetime.datetime.combine(datetime.date.today(),r.expected_in)+datetime.timedelta(minutes=5)).time(),axis=1)
     return df
 
@@ -89,7 +89,7 @@ def fetch_range(eid:int,s:datetime.date,e:datetime.date)->pd.DataFrame:
     df["hours"] = df.secs / 3600
     df["late"]  = df.apply(
         lambda r:False if r.expected_in is None else
-        pd.to_datetime(r.clock_in).time() >
+        pd.notna(r.clock_in) and pd.to_datetime(r.clock_in).time() >
         (datetime.datetime.combine(datetime.date.today(),r.expected_in)+datetime.timedelta(minutes=5)).time(),axis=1)
     return df
 
@@ -175,7 +175,7 @@ with tab_sched:
         cols=st.columns(len(headers))
         for i,field in enumerate(view.columns[:-1]):   # skip att_id
             cols[i].markdown(str(row[field]))
-        if cols[-1].button("✏️ Edit", key=f"edit_{row.att_id}"):
+        if cols[-1].button("✏️", key=f"edit_{row.att_id}"):
             st.session_state["edit_row"]=int(row.att_id)
 
     # ─── inline edit form ──────────────────────────────────────
@@ -210,15 +210,18 @@ with tab_sched:
 
             s_col,c_col = st.columns(2)
             if s_col.form_submit_button("💾 Save"):
-                update_schedule_row(rid,{
-                    "work_days_per_week": int(wd),
-                    "off_day":            dow.index(off),
-                    "clock_in":           cin,
-                    "clock_out":          cout,
-                    "effective_from":     efff,
-                    "effective_to":       efft,
-                    "reason":             rsn
-                })
+                close_current_and_add(
+                    eid = int(rec.employeeid),
+                    payload = {
+                    "wd":  int(wd),
+                    "off": dow.index(off),
+                    "cin": cin,
+                    "cout": cout,
+                    "eff": efff,       efft,
+                    "rsn": rsn            rsn
+                }
+            )
+
                 st.session_state.pop("edit_row")
                 st.rerun()
 
