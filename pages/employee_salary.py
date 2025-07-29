@@ -18,35 +18,63 @@ def month_bounds(anchor: datetime.date):
 
 @st.cache_data(show_spinner=False)
 def fetch_month(start_d, end_d, req_h):
+    """
+    For each employee:
+      • base salary = salary row in hr_salary_history whose range covers start_d
+      • variable adj from hr_salary_log
+      • worked hrs from hr_attendance
+    """
     sql = text("""
+    -- 1. variable bonuses / fines
     WITH adj AS (
         SELECT employeeid,
                SUM(CASE WHEN txn_type='bonus' THEN amount END) AS bonus,
                SUM(CASE WHEN txn_type='extra' THEN amount END) AS extra,
                SUM(CASE WHEN txn_type='fine'  THEN amount END) AS fine,
-               STRING_AGG(reason, '; ' ORDER BY txn_date)      AS reasons
+               STRING_AGG(reason, '; ' ORDER BY txn_date) AS reasons
         FROM hr_salary_log
         WHERE txn_date BETWEEN :s AND :e
-        GROUP BY employeeid),
+        GROUP BY employeeid
+    ),
+
+    -- 2. hours worked
     att AS (
         SELECT employeeid,
-               SUM(EXTRACT(EPOCH FROM (COALESCE(clock_out,clock_in)-clock_in)))/3600 AS worked
+               SUM(EXTRACT(EPOCH FROM (COALESCE(clock_out,clock_in) - clock_in)))/3600
+                 AS worked
         FROM hr_attendance
         WHERE punch_date BETWEEN :s AND :e
-        GROUP BY employeeid)
-    SELECT e.employeeid, e.fullname, e.basicsalary AS base,
-           COALESCE(a.bonus,0) AS bonus, COALESCE(a.extra,0) AS extra,
-           COALESCE(a.fine ,0) AS fine,
-           COALESCE(att.worked,0)             AS worked,
-           :req                               AS required,
-           COALESCE(att.worked,0) - :req      AS delta,
-           COALESCE(a.reasons,'')             AS reasons
-    FROM hr_employee e
-    LEFT JOIN adj a  USING (employeeid)
-    LEFT JOIN att    USING (employeeid)
-    ORDER BY e.fullname
+        GROUP BY employeeid
+    ),
+
+    -- 3. base pay effective this month
+    base AS (
+        SELECT DISTINCT ON (employeeid)
+               employeeid, salary
+        FROM   hr_salary_history
+        WHERE  effective_from <= :s
+          AND  COALESCE(effective_to, DATE '9999-12-31') >= :s
+        ORDER  BY employeeid, effective_from DESC
+    )
+
+    SELECT  emp.employeeid,
+            emp.fullname,
+            COALESCE(base.salary, 0)                AS base,
+            COALESCE(adj.bonus ,0)                  AS bonus,
+            COALESCE(adj.extra ,0)                  AS extra,
+            COALESCE(adj.fine  ,0)                  AS fine,
+            COALESCE(att.worked,0)                  AS worked,
+            :req                                    AS required,
+            COALESCE(att.worked,0) - :req           AS delta,
+            COALESCE(adj.reasons,'')                AS reasons
+    FROM hr_employee emp
+    LEFT JOIN base ON base.employeeid = emp.employeeid
+    LEFT JOIN adj  ON adj.employeeid  = emp.employeeid
+    LEFT JOIN att  ON att.employeeid  = emp.employeeid
+    ORDER BY emp.fullname;
     """)
-    df = pd.read_sql(sql, engine, params={"s": start_d, "e": end_d, "req": req_h})
+    df = pd.read_sql(sql, engine,
+                     params={"s": start_d, "e": end_d, "req": req_h})
     df["net"] = df["base"] + df["bonus"] + df["extra"] - df["fine"]
     return df
 
