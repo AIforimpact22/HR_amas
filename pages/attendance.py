@@ -220,10 +220,10 @@ with tab_sched:
                     "reason":             rsn
                 })
                 st.session_state.pop("edit_row")
-                st.experimental_rerun()
+                st.rerun()
 
             if c_col.form_submit_button("❌ Cancel"):
                 st.session_state.pop("edit_row")
-                st.experimental_rerun()
+                st.rerun()
     else:
         st.session_state.pop("edit_row",None)
