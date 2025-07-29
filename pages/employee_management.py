@@ -24,26 +24,42 @@ def save_file(up_file):
     return path
 
 def get_all_employees():
-    return pd.read_sql(text("SELECT * FROM hr_employee ORDER BY employeeid DESC"), engine)
+    return pd.read_sql("SELECT * FROM hr_employee ORDER BY employeeid DESC", engine)
 
-def add_employee(**payload):
-    sql = text("""
+# ➊ ADD employee + salary‑history in one transaction
+def add_employee_with_salary(emp_payload: dict, base_salary: float):
+    """
+    1. insert into hr_employee … RETURNING employeeid
+    2. insert into hr_salary_history (employeeid, salary, effective_from)
+       effective_from = employment_date
+    """
+    sql_emp = text("""
         INSERT INTO hr_employee (
             fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
-            address, date_of_birth, employment_date, basicsalary, health_condition,
+            address, date_of_birth, employment_date, health_condition,
             cv_url, national_id_image_url, national_id_no, email, family_members,
             education_degree, language, ss_registration_date, assurance, assurance_state,
             employee_state, photo_url
         ) VALUES (
             :fullname, :department, :position, :phone_no, :emergency_phone_no, :supervisor_phone_no,
-            :address, :date_of_birth, :employment_date, :basicsalary, :health_condition,
+            :address, :date_of_birth, :employment_date, :health_condition,
             :cv_url, :national_id_image_url, :national_id_no, :email, :family_members,
             :education_degree, :language, :ss_registration_date, :assurance, :assurance_state,
             :employee_state, :photo_url
         )
+        RETURNING employeeid
+    """)
+    sql_sal = text("""
+        INSERT INTO hr_salary_history
+              (employeeid, salary, effective_from, reason)
+        VALUES (:eid, :sal, :eff_from, 'Initial contract rate')
     """)
     with engine.begin() as conn:
-        conn.execute(sql, payload)
+        eid = conn.execute(sql_emp, emp_payload).scalar()         # 1️⃣
+        conn.execute(sql_sal,                                    # 2️⃣
+                     {"eid": eid,
+                      "sal": base_salary,
+                      "eff_from": emp_payload["employment_date"]})
 
 def update_employee(eid, **cols):
     sets = ", ".join([f"{k}=:{k}" for k in cols])
@@ -74,7 +90,7 @@ tab_add, tab_edit, tab_view = st.tabs(["➕ Add","📝 Edit","🔎 Search"])
 # ---------- ADD ----------
 with tab_add:
     with st.form("add"):
-        c1,c2=st.columns(2)
+        c1,c2 = st.columns(2)
         with c1:
             fullname=st.text_input("Full Name *")
             department=st.text_input("Department")
@@ -105,27 +121,31 @@ with tab_add:
             if not fullname.strip(): errs.append("Full Name")
             if basicsalary<=0: errs.append("Basic Salary")
             if errs: st.error("Missing: "+", ".join(errs)); st.stop()
-            add_employee(
+
+            emp_payload = dict(
                 fullname=fullname,department=department,position=position,phone_no=phone_no,
                 emergency_phone_no=emergency_phone_no,supervisor_phone_no=supervisor_phone_no,
                 address=address,date_of_birth=date_of_birth,employment_date=employment_date,
-                basicsalary=basicsalary,health_condition=health_condition,
+                health_condition=health_condition,
                 cv_url=save_file(cv_up),national_id_image_url=save_file(id_up),
                 national_id_no=national_id_no,email=email,family_members=family_members,
                 education_degree=education_degree,language=language,
                 ss_registration_date=ss_registration_date,assurance=assurance,assurance_state=assurance_state,
                 employee_state=employee_state,photo_url=save_file(photo_up)
             )
-            st.success("Added.")
+            add_employee_with_salary(emp_payload, basicsalary)
+            st.success("Employee added with initial salary record!")
 
 # ---------- EDIT ----------
 with tab_edit:
     df=get_all_employees()
-    if df.empty: st.info("No employees"); st.stop()
+    if df.empty:
+        st.info("No employees"); st.stop()
     df["label"]=df["fullname"]+" ("+df["email"].fillna("-")+")"
     row=df[df.label==st.selectbox("Select employee",df.label)].iloc[0]
+
     with st.form("edit"):
-        c1,c2=st.columns(2)
+        c1,c2 = st.columns(2)
         with c1:
             fullname=st.text_input("Full Name",row.fullname)
             department=st.text_input("Department",row.department or "")
@@ -136,7 +156,10 @@ with tab_edit:
             address=st.text_area("Address",row.address or "")
             date_of_birth=st.date_input("DOB",row.date_of_birth,*win(row.date_of_birth))
             employment_date=st.date_input("Employment Date",row.employment_date,*win(row.employment_date))
-            basicsalary=st.number_input("Salary",value=float(row.basicsalary),min_value=0.0,step=1000.0)
+
+            st.number_input("Salary (read‑only – use Raise/Cut page)", value=float(row.basicsalary),
+                            disabled=True)
+
             health_condition=st.text_input("Health Condition",row.health_condition or "")
             family_members=st.number_input("Family Members",value=int(row.family_members or 0),min_value=0)
             education_degree=st.text_input("Education Degree",row.education_degree or "")
@@ -157,7 +180,7 @@ with tab_edit:
                 row.employeeid,
                 fullname=fullname,department=department,position=position,phone_no=phone_no,
                 emergency_phone_no=emergency_phone_no,supervisor_phone_no=supervisor_phone_no,address=address,
-                date_of_birth=date_of_birth,employment_date=employment_date,basicsalary=basicsalary,
+                date_of_birth=date_of_birth,employment_date=employment_date,
                 health_condition=health_condition,cv_url=save_file(cv_up) or row.cv_url,
                 national_id_image_url=save_file(id_up) or row.national_id_image_url,
                 national_id_no=national_id_no,email=email,family_members=family_members,
@@ -165,13 +188,14 @@ with tab_edit:
                 ss_registration_date=ss_registration_date,assurance=assurance,assurance_state=assurance_state,
                 employee_state=employee_state,photo_url=save_file(photo_up) or row.photo_url
             )
-            st.success("Updated.")
+            st.success("Employee data updated (salary unchanged).")
 
 # ---------- VIEW / SEARCH ----------
 with tab_view:
     q=st.text_input("Search")
     data=search_employees(q) if q else get_all_employees()
-    if data.empty: st.info("No matches."); st.stop()
+    if data.empty:
+        st.info("No matches."); st.stop()
     for _,r in data.iterrows():
         with st.expander(f"{r.fullname} — {r.position or '-'}"):
             c1,c2=st.columns([1,2])
@@ -190,8 +214,12 @@ with tab_view:
 """)
             # attachments
             if r.cv_url and os.path.exists(r.cv_url):
-                with open(r.cv_url,"rb") as f: st.download_button("📄 CV",data=f,file_name=os.path.basename(r.cv_url))
-            elif r.cv_url: st.write("CV file:", os.path.basename(r.cv_url))
+                with open(r.cv_url,"rb") as f:
+                    st.download_button("📄 CV",data=f,file_name=os.path.basename(r.cv_url))
+            elif r.cv_url:
+                st.write("CV file:", os.path.basename(r.cv_url))
             if r.national_id_image_url and os.path.exists(r.national_id_image_url):
-                with open(r.national_id_image_url,"rb") as f: st.download_button("🪪 National ID",data=f,file_name=os.path.basename(r.national_id_image_url))
-            elif r.national_id_image_url: st.write("ID image:", os.path.basename(r.national_id_image_url))
+                with open(r.national_id_image_url,"rb") as f:
+                    st.download_button("🪪 National ID",data=f,file_name=os.path.basename(r.national_id_image_url))
+            elif r.national_id_image_url:
+                st.write("ID image:", os.path.basename(r.national_id_image_url))
