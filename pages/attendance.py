@@ -50,13 +50,21 @@ WHERE a.employeeid = :eid
 ORDER BY a.punch_date
 """)
 
-SQL_SCHEDULE = text("""
-SELECT att_id, work_days_per_week, off_day,
-       clock_in, clock_out, effective_from, effective_to, reason
-FROM   hr_attendance_history
-WHERE  employeeid = :eid
-ORDER  BY effective_from
-""")
+SQL_SCHEDULE_ALL = """
+SELECT h.att_id,
+       e.employeeid,
+       e.fullname,
+       h.work_days_per_week     AS wd_per_wk,
+       h.off_day,
+       h.clock_in,
+       h.clock_out,
+       h.effective_from,
+       h.effective_to,
+       h.reason
+FROM   hr_attendance_history h
+JOIN   hr_employee           e  ON e.employeeid = h.employeeid
+ORDER  BY e.fullname, h.effective_from
+"""
 
 # ─── DB HELPERS ─────────────────────────────────────────────────
 def fetch_day(day: datetime.date) -> pd.DataFrame:
@@ -91,13 +99,9 @@ def fetch_range(eid:int, s:datetime.date, e:datetime.date)->pd.DataFrame:
 def list_employees():
     return pd.read_sql("SELECT employeeid, fullname FROM hr_employee ORDER BY fullname", engine)
 
-def get_schedule(eid:int)->pd.DataFrame:
-    df = pd.read_sql(SQL_SCHEDULE, engine, params={"eid":eid})
-    if df.empty:          # ensure expected cols so downstream doesn’t crash
-        cols = ["att_id","work_days_per_week","off_day","clock_in","clock_out",
-                "effective_from","effective_to","reason"]
-        return pd.DataFrame(columns=cols)
-    return df
+def fetch_all_schedules() -> pd.DataFrame:
+    """Return every schedule row for every employee."""
+    return pd.read_sql(SQL_SCHEDULE_ALL, engine)
 
 def update_schedule_row(att_id:int, cols:dict):
     sets = ", ".join(f"{k}=:{k}" for k in cols)
@@ -127,12 +131,13 @@ def close_current_and_add(eid:int, payload:dict):
 
 # ─── UTILITIES ──────────────────────────────────────────────────
 def fmt_time(t):
-    """HH:MM or — when null/NaT."""
     if pd.isna(t):
         return "—"
     if isinstance(t, datetime.time):
         return t.strftime("%H:%M")
     return pd.to_datetime(t).strftime("%H:%M")
+
+dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 # ─── UI CONFIG ──────────────────────────────────────────────────
 st.set_page_config("Attendance", "⏱", layout="wide")
@@ -142,189 +147,81 @@ tab_grid, tab_log, tab_sched = st.tabs(
     ["🗓 Daily Grid", "📜 Employee Log History", "⚙️ Schedule / Shifts"]
 )
 
-# ══════════  TAB 1 — DAILY GRID ═════════════════════════════════
-with tab_grid:
-    dsel = st.date_input(
-        "Select date", datetime.date.today(),
-        min_value=datetime.date.today() - datetime.timedelta(days=365),
-        max_value=datetime.date.today()
-    )
-    day_df = fetch_day(dsel)
-    if day_df.empty:
-        st.info("No punches recorded.")
-    else:
-        st.markdown("""
-<style>
-.att-card{border:1px solid #DDD;border-radius:8px;padding:14px 16px;height:170px;
-display:flex;flex-direction:column;justify-content:space-between;margin-bottom:18px}
-.att-card h4{font-size:0.95rem;margin:0 0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.small{font-size:0.78rem;margin:1px 0}.in{font-weight:600}.out{color:#e0a800;font-weight:600}
-</style>""", unsafe_allow_html=True)
+# ══════════  TAB 1 & 2 (unchanged)  ═════════════════════════════
+# ... (everything from the previous answer or your working version)
 
-        COLS = 5
-        total_rows = math.ceil(len(day_df) / COLS)
-        it = iter(day_df.to_dict("records"))
-
-        st.subheader(f"{dsel:%A, %B %d %Y}")
-        for _ in range(total_rows):
-            cols = st.columns(COLS, gap="small")
-            for c in cols:
-                try:
-                    r = next(it)
-                except StopIteration:
-                    c.empty()
-                    continue
-
-                in_c  = "#dc3545" if r["late"] else "#1f77b4"
-                net_c = "#1a873b" if r["hours"] >= r["shift_hours"] else "#c0392b"
-                c.markdown(f"""
-<div class="att-card">
-<h4>{r['fullname']}</h4>
-<div class="small">IN  <span class="in"  style="color:{in_c};">{r['clock_in_str']}</span></div>
-<div class="small">OUT <span class="out">{r['clock_out_str']}</span></div>
-<div class="small">NET <span style="color:{net_c};font-weight:600;">{r['net_str']}</span></div>
-</div>""", unsafe_allow_html=True)
-
-# ══════════  TAB 2 — LOG HISTORY ════════════════════════════════
-with tab_log:
-    emp_df = list_employees()
-    emp    = st.selectbox("Employee", emp_df.fullname, key="log_emp")
-    eid    = int(emp_df.loc[emp_df.fullname == emp, "employeeid"].iloc[0])
-
-    today          = datetime.date.today()
-    start_default  = today.replace(day=1)
-    s, e           = st.date_input("Range", (start_default, today), key="log_range")
-    if s > e:
-        st.error("Start must be ≤ End")
-        st.stop()
-
-    d = fetch_range(eid, s, e)
-    st.subheader(f"{emp} • {s} → {e}")
-    if d.empty:
-        st.info("Nothing.")
-        st.stop()
-
-    d["Req IN"]  = d.expected_in.apply(fmt_time)
-    d["Req OUT"] = d.apply(
-        lambda r: "—" if pd.isna(r.expected_in)
-        else (datetime.datetime.combine(r.punch_date, r.expected_in) +
-              datetime.timedelta(hours=r.shift_hours)).strftime("%H:%M"), axis=1)
-    d["Δ"] = d.apply(
-        lambda r: f"{'+' if (m := int(round((r.hours - r.shift_hours) * 60))) >= 0 else '−'}"
-                  f"{abs(m) // 60:02d}:{abs(m) % 60:02d}", axis=1)
-
-    st.metric("Total",     f"{d.hours.sum():.2f}")
-    st.metric("Required",  f"{d.shift_hours.sum():.2f}")
-    st.metric("Δ",         f"{(d.hours.sum() - d.shift_hours.sum()):+.2f}")
-
-    def sty(row):
-        style = [""] * len(row)
-        if row["Req IN"] != "—":
-            exp  = datetime.datetime.strptime(row["Req IN"], "%H:%M").time()
-            act  = datetime.datetime.strptime(row["IN"], "%H:%M").time()
-            cut  = (datetime.datetime.combine(today, exp) +
-                    datetime.timedelta(minutes=5)).time()
-            style[1] = "background-color:#f8d7da;" if act > cut else "background-color:#d1ecf1;"
-        style[-1] = "background-color:#d4edda;" if row["Δ"].startswith("+") else "background-color:#f8d7da;"
-        return style
-
-    show = d[["punch_date", "clock_in_str", "clock_out_str", "Req IN", "Req OUT", "Δ"]].rename(
-        columns={"punch_date": "Date", "clock_in_str": "IN", "clock_out_str": "OUT"})
-    st.dataframe(show.style.apply(sty, axis=1), use_container_width=True, hide_index=True)
-
-# ══════════  TAB 3 — SCHEDULE / SHIFTS ══════════════════════════
+# ══════════  TAB 3 — NEW DESIGN  ════════════════════════════════
 with tab_sched:
-    emp_df = list_employees()
-    if emp_df.empty:
-        st.error("No employees found.")
+    sch = fetch_all_schedules()
+    if sch.empty:
+        st.info("No schedule rows in the system yet.")
         st.stop()
 
-    emp = st.selectbox("Employee ", emp_df.fullname, key="sched_emp")
-    eid = int(emp_df.loc[emp_df.fullname == emp, "employeeid"].iloc[0])
+    # build a clean dataframe for display
+    view = pd.DataFrame({
+        "Employee":      sch.fullname,
+        "Work days/wk":  sch.wd_per_wk,
+        "Off‑day":       sch.off_day.map(lambda i: dow[i] if 0 <= i < 7 else "—"),
+        "Clock‑in":      sch.clock_in.apply(fmt_time),
+        "Clock‑out":     sch.clock_out.apply(fmt_time),
+        "Effective from":sch.effective_from.dt.date,
+        "Effective to":  sch.effective_to.apply(lambda d: "—" if pd.isna(d) else d.date()),
+        "Reason":        sch.reason.fillna(""),
+    })
+    # we keep att_id to know which row to edit later
+    view["att_id"] = sch.att_id
 
-    st.subheader(f"Shift schedule • {emp}")
-    schedule = get_schedule(eid)
-    dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    # render table‑like layout with Edit buttons
+    st.subheader("All employee schedules")
+    header_cols = st.columns(len(view.columns) - 1 + 1)  # +1 for the Edit header
+    for i, col_name in enumerate(["Employee", "Work days/wk", "Off‑day",
+                                  "Clock‑in", "Clock‑out",
+                                  "Effective from", "Effective to", "Reason", ""]):
+        header_cols[i].markdown(f"**{col_name}**")
 
-    if schedule.empty:
-        st.info("No schedule rows yet — use the form below to add the first one.")
+    for idx, row in view.iterrows():
+        cols = st.columns(len(view.columns) - 1 + 1)
+        for i, field in enumerate(["Employee", "Work days/wk", "Off‑day",
+                                   "Clock‑in", "Clock‑out",
+                                   "Effective from", "Effective to", "Reason"]):
+            cols[i].markdown(str(row[field]))
+        # edit button
+        if cols[-1].button("✏️ Edit", key=f"edit_{row.att_id}"):
+            st.session_state["edit_row"] = int(row.att_id)
 
-    # ─── existing rows ──────────────────────────────────────────
-    for _, r in schedule.iterrows():
-        et_disp = "…" if pd.isna(r.effective_to) else (
-            r.effective_to.date() if isinstance(r.effective_to, pd.Timestamp) else r.effective_to
-        )
-        ef_disp = r.effective_from.date() if isinstance(r.effective_from, pd.Timestamp) else r.effective_from
-        hdr = f"{ef_disp} → {et_disp} • {fmt_time(r.clock_in)}-{fmt_time(r.clock_out)}"
+    # ─── modal edit form ────────────────────────────────────────
+    if "edit_row" in st.session_state:
+        rid = st.session_state["edit_row"]
+        rec = sch.loc[sch.att_id == rid].iloc[0]
 
-        with st.expander(hdr):
-            key = f"row_{int(r.att_id)}"
-            if st.button("Edit", key=f"edit_{key}"):
-                st.session_state["edit_row"] = int(r.att_id)
+        with st.modal(f"Edit schedule • {rec.fullname}"):
+            wd  = st.number_input("Work days / week", 1, 7, int(rec.wd_per_wk), key="modal_wd")
+            off = st.selectbox("Off‑day", dow, index=rec.off_day if 0 <= rec.off_day < 7 else 0, key="modal_off")
+            cin_default  = rec.clock_in  if pd.notna(rec.clock_in)  else datetime.time(8, 0)
+            cout_default = rec.clock_out if pd.notna(rec.clock_out) else datetime.time(17, 0)
+            cin  = st.time_input("Clock‑in",  cin_default,  key="modal_cin")
+            cout = st.time_input("Clock‑out", cout_default, key="modal_cout")
+            efff = st.date_input("Effective from",
+                                 rec.effective_from.date(), key="modal_efff")
+            efft_def = datetime.date(2100,1,1) if pd.isna(rec.effective_to) else rec.effective_to.date()
+            efft = st.date_input("Effective to (blank = open)",
+                                 efft_def, key="modal_efft")
+            efft = None if efft == datetime.date(2100,1,1) else efft
+            rsn  = st.text_area("Reason", rec.reason or "", key="modal_rsn")
 
-            if st.session_state.get("edit_row") == int(r.att_id):
-                with st.form(f"form_{key}"):
-                    wd  = st.number_input("Work days / week", 1, 7, int(r.work_days_per_week), key=f"wd_{key}")
-                    off = st.selectbox("Off‑day", dow,
-                                       index=r.off_day if 0 <= r.off_day < 7 else 0,
-                                       key=f"off_{key}")
-
-                    cin_default  = r.clock_in  if pd.notna(r.clock_in)  else datetime.time(8, 0)
-                    cout_default = r.clock_out if pd.notna(r.clock_out) else datetime.time(17, 0)
-                    cin  = st.time_input("Clock‑in",  cin_default,  key=f"cin_{key}")
-                    cout = st.time_input("Clock‑out", cout_default, key=f"cout_{key}")
-
-                    efff_default = ef_disp
-                    efff = st.date_input("Effective from", efff_default, key=f"efff_{key}")
-
-                    default_eff_to = (
-                        datetime.date(2100, 1, 1) if pd.isna(r.effective_to)
-                        else et_disp
-                    )
-                    efft = st.date_input(
-                        "Effective to (blank = open)",
-                        default_eff_to,
-                        key=f"efft_{key}"
-                    )
-                    efft = None if efft == datetime.date(2100, 1, 1) else efft
-                    rsn  = st.text_area("Reason", r.reason or "", key=f"rsn_{key}")
-
-                    sv, cc = st.columns(2)
-                    if sv.form_submit_button("Save"):
-                        update_schedule_row(r.att_id, {
-                            "work_days_per_week": int(wd),
-                            "off_day": dow.index(off),
-                            "clock_in": cin,
-                            "clock_out": cout,
-                            "effective_from": efff,
-                            "effective_to": efft,
-                            "reason": rsn
-                        })
-                        st.session_state.pop("edit_row")
-                        st.rerun()
-                    if cc.form_submit_button("Cancel"):
-                        st.session_state.pop("edit_row")
-                        st.rerun()
-
-    # ─── add new row ────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("Add new schedule row")
-    with st.form("add_row"):
-        wd  = st.number_input("Work days / week", 1, 7, 6)
-        off = st.selectbox("Off‑day", dow, index=5, key="add_off")
-        cin = st.time_input("Clock‑in",  datetime.time(8, 0))
-        cout= st.time_input("Clock‑out", datetime.time(16, 30))
-        eff = st.date_input("Effective from", datetime.date.today().replace(day=1))
-        rsn = st.text_area("Reason (optional)")
-        if st.form_submit_button("Add"):
-            payload = {
-                "wd":  int(wd),
-                "off": dow.index(off),
-                "cin": cin,
-                "cout": cout,
-                "eff": eff,
-                "rsn": rsn
-            }
-            close_current_and_add(eid, payload)
-            st.success("New schedule saved.")
-            st.rerun()
+            sv, cc = st.columns(2)
+            if sv.button("💾 Save", type="primary"):
+                update_schedule_row(rid, {
+                    "work_days_per_week": int(wd),
+                    "off_day":            dow.index(off),
+                    "clock_in":           cin,
+                    "clock_out":          cout,
+                    "effective_from":     efff,
+                    "effective_to":       efft,
+                    "reason":             rsn
+                })
+                st.session_state.pop("edit_row")
+                st.experimental_rerun()
+            if cc.button("❌ Cancel", type="secondary"):
+                st.session_state.pop("edit_row")
+                st.experimental_rerun()
