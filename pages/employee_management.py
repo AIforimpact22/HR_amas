@@ -229,34 +229,61 @@ with tab_edit:
 
 # ---------- VIEW / SEARCH ----------
 with tab_view:
-    q=st.text_input("Search")
-    data=search_employees(q) if q else get_all_employees()
+    q = st.text_input("Search")
+    data = search_employees(q) if q else get_all_employees()
     if data.empty:
-        st.info("No matches."); st.stop()
-    for _,r in data.iterrows():
+        st.info("No matches.")
+        st.stop()
+
+    # ▸ pull current salary for every employee in one query
+    sal_df = pd.read_sql(
+        """
+        SELECT DISTINCT ON (employeeid) employeeid, salary
+        FROM   hr_salary_history
+        WHERE  effective_from <= CURRENT_DATE
+          AND  COALESCE(effective_to, DATE '9999-12-31') >= CURRENT_DATE
+        ORDER  BY employeeid, effective_from DESC
+        """,
+        engine,
+    )
+    sal_map = dict(zip(sal_df.employeeid, sal_df.salary))
+
+    for _, r in data.iterrows():
+        current_salary = sal_map.get(r.employeeid, "—")
         with st.expander(f"{r.fullname} — {r.position or '-'}"):
-            c1,c2=st.columns([1,2])
+            c1, c2 = st.columns([1, 2])
             with c1:
                 if r.photo_url and os.path.exists(r.photo_url):
-                    st.image(r.photo_url,width=150)
+                    st.image(r.photo_url, width=150)
                 elif r.photo_url:
                     st.write("Photo file:", os.path.basename(r.photo_url))
             with c2:
-                st.markdown(f"""
+                st.markdown(
+                    f"""
 **Dept:** {r.department or '-'}   **Phone:** {r.phone_no or '-'}   **Email:** {r.email or '-'}  
 **DOB:** {r.date_of_birth}   **Employment:** {r.employment_date}  
-**Salary:** {r.basicsalary}   **State:** {r.employee_state}  
+**Salary:** {current_salary}   **State:** {r.employee_state}  
 **Assurance:** {r.assurance} ({r.assurance_state})  
 **Languages:** {r.language or '-'}
-""")
+"""
+                )
             # attachments
             if r.cv_url and os.path.exists(r.cv_url):
-                with open(r.cv_url,"rb") as f:
-                    st.download_button("📄 CV",data=f,file_name=os.path.basename(r.cv_url))
+                with open(r.cv_url, "rb") as f:
+                    st.download_button(
+                        "📄 CV",
+                        data=f,
+                        file_name=os.path.basename(r.cv_url),
+                    )
             elif r.cv_url:
                 st.write("CV file:", os.path.basename(r.cv_url))
             if r.national_id_image_url and os.path.exists(r.national_id_image_url):
-                with open(r.national_id_image_url,"rb") as f:
-                    st.download_button("🪪 National ID",data=f,file_name=os.path.basename(r.national_id_image_url))
+                with open(r.national_id_image_url, "rb") as f:
+                    st.download_button(
+                        "🪪 National ID",
+                        data=f,
+                        file_name=os.path.basename(r.national_id_image_url),
+                    )
             elif r.national_id_image_url:
                 st.write("ID image:", os.path.basename(r.national_id_image_url))
+
