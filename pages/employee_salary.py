@@ -136,7 +136,7 @@ with tab_sum:
         cols[9].markdown(r["reasons"] or "—")
 
         # restored Edit button
-        if cols[-1].button("Edit Adj.", key=f"edit_adj_{eid}"):
+        if cols[-1].button("✏️", key=f"edit_adj_{eid}", help="Edit bonus / extra / fine"):
             st.session_state["edit_emp"] = eid
 
         # inline form for bonus / extra / fine
