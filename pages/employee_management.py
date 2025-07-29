@@ -289,8 +289,3 @@ with tab_view:
                     )
             elif r.national_id_image_url:
                 st.write("ID image:", os.path.basename(r.national_id_image_url))
-
-                    )
-            elif r.national_id_image_url:
-                st.write("ID image:", os.path.basename(r.national_id_image_url))
-
