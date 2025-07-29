@@ -10,15 +10,20 @@ if "pg_engine" not in st.session_state:
 engine = st.session_state.pg_engine
 
 # ─── Helper SQL snippets -------------------------------------------------------
-SQL_DAY = text("""
+SQL_SHIFT_HRS = """
+CASE
+  WHEN h.clock_out >= h.clock_in
+    THEN (EXTRACT(EPOCH FROM h.clock_out) - EXTRACT(EPOCH FROM h.clock_in)) / 3600
+  ELSE (EXTRACT(EPOCH FROM h.clock_out) + 86400 - EXTRACT(EPOCH FROM h.clock_in)) / 3600
+END
+"""
+
+SQL_DAY = text(f"""
 SELECT e.fullname,
        a.clock_in,
        a.clock_out,
-       h.clock_in           AS expected_in,
-       CASE WHEN h.clock_out < h.clock_in
-            THEN EXTRACT(EPOCH FROM (h.clock_out + INTERVAL '1 day' - h.clock_in))
-            ELSE EXTRACT(EPOCH FROM (h.clock_out - h.clock_in))
-       END / 3600           AS shift_hours,
+       h.clock_in AS expected_in,
+       {SQL_SHIFT_HRS}            AS shift_hours,
        EXTRACT(EPOCH FROM (COALESCE(a.clock_out, NOW()) - a.clock_in)) AS secs
 FROM   hr_attendance a
 JOIN   hr_employee  e USING (employeeid)
@@ -30,15 +35,12 @@ WHERE  a.punch_date = :d
 ORDER  BY e.fullname
 """)
 
-SQL_RANGE = text("""
+SQL_RANGE = text(f"""
 SELECT a.punch_date,
        a.clock_in,
        a.clock_out,
        h.clock_in AS expected_in,
-       CASE WHEN h.clock_out < h.clock_in
-            THEN EXTRACT(EPOCH FROM (h.clock_out + INTERVAL '1 day' - h.clock_in))
-            ELSE EXTRACT(EPOCH FROM (h.clock_out - h.clock_in))
-       END / 3600           AS shift_hours,
+       {SQL_SHIFT_HRS}            AS shift_hours,
        EXTRACT(EPOCH FROM (COALESCE(a.clock_out, NOW()) - a.clock_in)) AS secs
 FROM   hr_attendance a
 LEFT JOIN hr_attendance_history h
@@ -144,9 +146,8 @@ with tab_grid:
                     col.empty()
                     continue
 
-                # colour logic
                 net_color = "#1a873b" if r["hours"] >= r["shift_hours"] else "#c0392b"
-                in_col = "#dc3545" if r["late"] else "#1f77b4"
+                in_col    = "#dc3545" if r["late"] else "#1f77b4"
 
                 col.markdown(
                     f"""
@@ -182,7 +183,6 @@ with tab_history:
         st.error("Start date must be before end date.")
         st.stop()
 
-    # ─── pull punches + roster row per day ────────────────────────
     data = fetch_range(emp_id, start_date, end_date)
     st.subheader(f"{emp_choice} • {start_date:%Y-%m-%d} → {end_date:%Y-%m-%d}")
 
@@ -190,7 +190,7 @@ with tab_history:
         st.info("No attendance records for this interval.")
         st.stop()
 
-    # ─── per‑day expected IN / OUT strings ───────────────────────
+    # Expected IN / OUT strings
     data["Req IN"] = data["expected_in"].apply(
         lambda t: t.strftime("%H:%M") if pd.notna(t) else "—"
     )
@@ -198,34 +198,32 @@ with tab_history:
     def _req_out(row):
         if pd.isna(row.expected_in):
             return "—"
-        # build datetime on punch date (might spill to next day)
-        base_dt = datetime.datetime.combine(row.punch_date, row.expected_in)
-        req_out_dt = base_dt + datetime.timedelta(hours=row.shift_hours)
-        return req_out_dt.strftime("%H:%M")
+        base_dt   = datetime.datetime.combine(row.punch_date, row.expected_in)
+        req_out   = base_dt + datetime.timedelta(hours=row.shift_hours)
+        return req_out.strftime("%H:%M")
 
     data["Req OUT"] = data.apply(_req_out, axis=1)
 
-    # ─── Δ ±HH:MM string and colours ─────────────────────────────
+    # Δ ±HH:MM
     def _delta(row):
         diff_min = int(round((row.hours - row.shift_hours) * 60))
         sign = "+" if diff_min >= 0 else "−"
-        mm = abs(diff_min)
-        hh, mm = divmod(mm, 60)
+        hh, mm = divmod(abs(diff_min), 60)
         return f"{sign}{hh:02d}:{mm:02d}"
 
     data["Δ"] = data.apply(_delta, axis=1)
 
-    # ─── summary metrics ─────────────────────────────────────────
-    total_hours = data["hours"].sum()
+    # Summary metrics
+    total_hours    = data["hours"].sum()
     expected_hours = data["shift_hours"].sum()
-    delta_hours = total_hours - expected_hours
+    delta_hours    = total_hours - expected_hours
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Total hours",   f"{total_hours:.2f}")
-    c2.metric("Required",      f"{expected_hours:.2f}")
-    c3.metric("Δ",             f"{delta_hours:+.2f}", delta_hours)
+    c1.metric("Total hours", f"{total_hours:.2f}")
+    c2.metric("Required",    f"{expected_hours:.2f}")
+    c3.metric("Δ",           f"{delta_hours:+.2f}", delta_hours)
 
-    # ─── final table build ───────────────────────────────────────
+    # Final table
     tbl = data[
         ["punch_date", "clock_in_str", "clock_out_str", "Req IN", "Req OUT", "Δ"]
     ].rename(
@@ -234,8 +232,6 @@ with tab_history:
 
     def colour_row(row):
         style = [""] * len(row)
-
-        # IN late? (> Req IN + 5 min)
         if row["Req IN"] != "—":
             exp_in = datetime.datetime.strptime(row["Req IN"], "%H:%M").time()
             act_in = datetime.datetime.strptime(row["IN"], "%H:%M").time()
@@ -243,8 +239,6 @@ with tab_history:
                       + datetime.timedelta(minutes=5)).time()
             style[1] = "background-color:#f8d7da;" if act_in > cut \
                        else "background-color:#d1ecf1;"
-
-        # Δ colour
         style[-1] = "background-color:#d4edda;" if row["Δ"].startswith("+") \
                     else "background-color:#f8d7da;"
         return style
