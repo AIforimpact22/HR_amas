@@ -171,7 +171,7 @@ with tab_history:
 
     emp_choice = st.selectbox("Select employee", emp_df["fullname"], key="hist_emp")
     emp_row = emp_df[emp_df["fullname"] == emp_choice].iloc[0]
-    emp_id = int(emp_row["employeeid"])  # cast fixes numpy.int64
+    emp_id   = int(emp_row["employeeid"])  # cast fixes numpy.int64
 
     today = datetime.date.today()
     default_start = today.replace(day=1)
@@ -191,45 +191,68 @@ with tab_history:
         st.info("No attendance records for this interval.")
         st.stop()
 
-    # Summary metrics based on per‑row shift hours
-    total_hours = data["hours"].sum()
+    # ─── Summary metrics ─────────────────────────────────────────────
+    total_hours    = data["hours"].sum()
     expected_hours = data["shift_hours"].sum()
-    delta_hours = total_hours - expected_hours
+    delta_hours    = total_hours - expected_hours
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Total hours", f"{total_hours:.2f}")
-    m2.metric("Expected", f"{expected_hours:.2f}")
-    m3.metric("Δ", f"{delta_hours:+.2f}", delta_hours if delta_hours else None)
+    m1.metric("Total hours",   f"{total_hours:.2f}")
+    m2.metric("Expected",      f"{expected_hours:.2f}")
+    m3.metric("Δ",             f"{delta_hours:+.2f}", delta_hours if delta_hours else None)
 
-    # Daily table
+    # ─── Build daily table ───────────────────────────────────────────
+    # required IN / OUT strings
+    data["Req IN"] = data["expected_in"].apply(
+        lambda t: t.strftime("%H:%M") if pd.notna(t) else "—"
+    )
+
+    def _req_out(row):
+        if pd.isna(row.expected_in):
+            return "—"
+        # build a dt on punch_date then add shift_hours
+        base_dt = datetime.datetime.combine(row.punch_date, row.expected_in)
+        out_dt  = base_dt + datetime.timedelta(hours=row.shift_hours)
+        return out_dt.strftime("%H:%M")
+
+    data["Req OUT"] = data.apply(_req_out, axis=1)
+
+    # Δ as ±HH:MM
+    def _delta_str(row):
+        delta = int((row.hours - row.shift_hours) * 60)  # minutes
+        sign  = "+" if delta >= 0 else "−"
+        delta = abs(delta)
+        hh, mm = divmod(delta, 60)
+        return f"{sign}{hh:02d}:{mm:02d}"
+
+    data["Δ"] = data.apply(_delta_str, axis=1)
+
     tbl = data[
-        ["punch_date", "clock_in_str", "clock_out_str", "net_str", "hours", "expected_in", "shift_hours", "late"]
+        ["punch_date", "clock_in_str", "clock_out_str", "Req IN", "Req OUT", "Δ"]
     ].rename(
         columns={
             "punch_date": "Date",
             "clock_in_str": "IN",
             "clock_out_str": "OUT",
-            "net_str": "NET",
-            "hours": "Hours",
-            "shift_hours": "Req",
-            "late": "Late",
         }
     )
-    tbl["Hours"] = tbl["Hours"].round(2)
-    tbl["Req"] = tbl["Req"].round(2)
 
+    # ─── Styling ────────────────────────────────────────────────────
     def colour_row(row):
         style = [""] * len(row)
-        # late colour on IN
-        if row["Late"]:
-            style[1] = "background-color:#f8d7da;"
-        else:
-            style[1] = "background-color:#d1ecf1;"
-        # Hours comparison red/green
-        if row["Hours"] < row["Req"]:
-            style[4] = "background-color:#f8d7da;"
-        else:
-            style[4] = "background-color:#d4edda;"
+
+        # late highlight on IN ( > Req IN + 5 min)
+        if row["Req IN"] != "—":
+            exp_in = datetime.datetime.strptime(row["Req IN"], "%H:%M").time()
+            act_in = datetime.datetime.strptime(row["IN"], "%H:%M").time()
+            late_cut = (datetime.datetime.combine(datetime.date.today(), exp_in)
+                        + datetime.timedelta(minutes=5)).time()
+            style[1] = "background-color:#f8d7da;" if act_in > late_cut \
+                       else "background-color:#d1ecf1;"
+
+        # Δ colouring
+        style[-1] = "background-color:#d4edda;" if row["Δ"].startswith("+") \
+                    else "background-color:#f8d7da;"
         return style
 
     st.dataframe(
