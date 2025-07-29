@@ -61,7 +61,8 @@ ORDER  BY effective_from
 # ─── DB HELPERS ─────────────────────────────────────────────────
 def fetch_day(day: datetime.date) -> pd.DataFrame:
     df = pd.read_sql(SQL_DAY, engine, params={"d": day})
-    if df.empty: return df
+    if df.empty:
+        return df
     df["clock_in_str"]  = pd.to_datetime(df.clock_in).dt.strftime("%H:%M")
     df["clock_out_str"] = pd.to_datetime(df.clock_out).dt.strftime("%H:%M")
     df["hours"]   = df.secs / 3600
@@ -75,7 +76,8 @@ def fetch_day(day: datetime.date) -> pd.DataFrame:
 
 def fetch_range(eid:int, s:datetime.date, e:datetime.date)->pd.DataFrame:
     df = pd.read_sql(SQL_RANGE, engine, params={"eid":eid,"s":s,"e":e})
-    if df.empty: return df
+    if df.empty:
+        return df
     df["clock_in_str"]  = pd.to_datetime(df.clock_in).dt.strftime("%H:%M")
     df["clock_out_str"] = pd.to_datetime(df.clock_out).dt.strftime("%H:%M")
     df["hours"] = df.secs / 3600
@@ -215,7 +217,9 @@ with tab_sched:
 
     # ─── existing rows ──────────────────────────────────────────
     for _,r in schedule.iterrows():
-        hdr=f"{r.effective_from} → {r.effective_to or '…'} • {r.clock_in:%H:%M}-{r.clock_out:%H:%M}"
+        # header text
+        et_disp = "…" if pd.isna(r.effective_to) else r.effective_to
+        hdr=f"{r.effective_from} → {et_disp} • {r.clock_in:%H:%M}-{r.clock_out:%H:%M}"
         with st.expander(hdr):
             key=f"row_{int(r.att_id)}"
             if st.button("Edit",key=f"edit_{key}"):
@@ -227,8 +231,9 @@ with tab_sched:
                     cin = st.time_input("Clock‑in",r.clock_in,key=f"cin_{key}")
                     cout= st.time_input("Clock‑out",r.clock_out,key=f"cout_{key}")
                     efff= st.date_input("Effective from",r.effective_from,key=f"efff_{key}")
+                    default_eff_to = datetime.date(2100,1,1) if pd.isna(r.effective_to) else r.effective_to
                     efft= st.date_input("Effective to (blank = open)",
-                                        r.effective_to or datetime.date(2100,1,1),
+                                        default_eff_to,
                                         key=f"efft_{key}")
                     efft=None if efft==datetime.date(2100,1,1) else efft
                     rsn = st.text_area("Reason",r.reason or "",key=f"rsn_{key}")
