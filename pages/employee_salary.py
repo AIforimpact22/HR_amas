@@ -343,6 +343,3 @@ with tab_push:
                     )
             st.success("Salaries finalized and pushed to finance. This month is now locked.")
             st.cache_data.clear(); st.rerun()
-                    )
-            st.success("Salaries finalized and pushed to finance. This month is now locked.")
-            st.cache_data.clear(); st.rerun()
