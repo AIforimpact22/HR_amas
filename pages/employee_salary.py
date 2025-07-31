@@ -85,9 +85,17 @@ def close_current_and_insert_raise(eid:int, new_salary:float,
         con.execute(sql_new,
                     {"eid": eid, "sal": new_salary, "eff": eff_from, "rsn": reason})
 
+def add_txn(eid: int, dt: datetime.date, amt: float, kind: str, rsn: str):
+    sql = text("""
+        INSERT INTO hr_salary_log (employeeid, txn_date, amount, txn_type, reason)
+        VALUES (:eid, :dt, :amt, :kind, :rsn)
+    """)
+    with engine.begin() as con:
+        con.execute(sql, {"eid": eid, "dt": dt, "amt": amt, "kind": kind, "rsn": rsn})
+
 # ────────────────────── UI ───────────────────────────────────────
 st.set_page_config(page_title="Employee Salary", page_icon="💰", layout="wide")
-tab_sum, tab_raise = st.tabs(["📊 Monthly Summary", "➕ Raise / Cut"])
+tab_sum, tab_raise, tab_push = st.tabs(["📊 Monthly Summary", "➕ Raise / Cut", "📤 Push to Finance"])
 
 # keep shared anchor in session_state
 if "pay_anchor" not in st.session_state:
@@ -189,7 +197,7 @@ with tab_raise:
         emp_id   = int(emp_df.loc[emp_df["fullname"]==emp_name, "employeeid"].iloc[0])
 
         new_sal  = st.number_input("New monthly salary", min_value=0.0, step=100_000.0)
-        eff_month = st.date_input("Effective month", anchor, help="Choose any day; will snap to 1st")
+        eff_month = st.date_input("Effective month", st.session_state.pay_anchor, help="Choose any day; will snap to 1st")
         # snap to first‑of‑month
         eff_first = eff_month.replace(day=1)
 
@@ -202,3 +210,94 @@ with tab_raise:
                 close_current_and_insert_raise(emp_id, new_sal, eff_first, reason.strip())
                 st.success(f"Saved. New base salary starts {eff_first:%Y‑%m‑%d}")
                 st.cache_data.clear(); st.rerun()
+
+# ─── Tab 3: Push to Finance ────────────────────────────────────
+with tab_push:
+    st.header("📤 Push Monthly Salaries to Finance")
+    # select month
+    sel_month = st.date_input(
+        "Select month to finalize", 
+        st.session_state.pay_anchor, 
+        key="push_month"
+    )
+    month_first = sel_month.replace(day=1)
+    start_d, end_d = month_bounds(month_first)
+    days = (end_d - start_d).days + 1
+    req_hours = SHIFT_HOURS * (days - 4)
+
+    # check if already pushed for this month
+    check_sql = text("""
+        SELECT COUNT(*) FROM hr_salary_pushed WHERE month = :m
+    """)
+    with engine.connect() as con:
+        already_pushed = con.execute(check_sql, {"m": month_first}).scalar() > 0
+
+    st.caption(f"Period **{start_d:%Y‑%m‑%d} → {end_d:%Y‑%m‑%d}** • "
+               f"Required h/emp = {req_hours:.1f} • "
+               f"Month status: {'✅ Already pushed' if already_pushed else '🟡 Not yet pushed'}")
+
+    # fetch calculated salaries for this month
+    df = fetch_month(start_d, end_d, req_hours)
+
+    if already_pushed:
+        st.info("Salaries for this month have already been pushed to finance. Viewing mode only.")
+        # show the pushed records (view-only)
+        pushed = pd.read_sql(
+            text("""
+                SELECT p.*, e.fullname FROM hr_salary_pushed p
+                JOIN hr_employee e ON e.employeeid = p.employeeid
+                WHERE month = :m
+                ORDER BY e.fullname
+            """), engine, params={"m": month_first}
+        )
+        st.dataframe(pushed[["fullname", "base", "bonus", "extra", "fine", "net", "note", "created_by", "created_at"]])
+    else:
+        st.warning("This will finalize all employee salaries for the selected month. You cannot edit or re-push after this.")
+        # notes for each employee
+        notes = {}
+        for _, row in df.iterrows():
+            eid = int(row["employeeid"])
+            notes[eid] = st.text_input(
+                f"Note for {row['fullname']}",
+                key=f"note_{eid}"
+            )
+        if st.button("Push all to Finance (Finalize)", type="primary"):
+            # Optional: confirmation step
+            if st.confirm("Are you sure? This will lock all employee salaries for the selected month."):
+                # Insert all
+                with engine.begin() as con:
+                    for _, row in df.iterrows():
+                        eid = int(row["employeeid"])
+                        base = float(row["base"])
+                        bonus = float(row["bonus"])
+                        extra = float(row["extra"])
+                        fine = float(row["fine"])
+                        net = float(row["net"])
+                        note = notes[eid]
+                        created_by = st.session_state.get("user", "hr")
+                        con.execute(
+                            text("""
+                                INSERT INTO hr_salary_pushed
+                                  (employeeid, month, base, bonus, extra, fine, net, note, created_by)
+                                VALUES
+                                  (:eid, :month, :base, :bonus, :extra, :fine, :net, :note, :created_by)
+                            """),
+                            {
+                                "eid": eid,
+                                "month": month_first,
+                                "base": base,
+                                "bonus": bonus,
+                                "extra": extra,
+                                "fine": fine,
+                                "net": net,
+                                "note": note,
+                                "created_by": created_by,
+                            }
+                        )
+                st.success("Salaries finalized and pushed to finance. This month is now locked.")
+                st.cache_data.clear(); st.rerun()
+        else:
+            # Preview table before pushing
+            df_preview = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
+            df_preview["note"] = [notes[int(row["employeeid"])] for _, row in df.iterrows()]
+            st.dataframe(df_preview)
