@@ -263,6 +263,25 @@ with tab_push:
             note_parts.append(f"Adj.: {row['reasons']}")
         notes.append(" | ".join(note_parts) if note_parts else "")
 
+    # Prepare preview table with totals
+    preview_cols = ["fullname", "base", "bonus", "extra", "fine", "net", "note"]
+    df_preview = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
+    df_preview["note"] = notes
+
+    # Add totals row
+    totals = {
+        "fullname": "**Totals**",
+        "base": f"**{df_preview['base'].sum():,.0f}**",
+        "bonus": f"**{df_preview['bonus'].sum():,.0f}**",
+        "extra": f"**{df_preview['extra'].sum():,.0f}**",
+        "fine": f"**{df_preview['fine'].sum():,.0f}**",
+        "net": f"**{df_preview['net'].sum():,.0f}**",
+        "note": ""
+    }
+    df_totals = pd.DataFrame([totals])
+    # Show main preview table, then totals row
+    st.dataframe(pd.concat([df_preview, df_totals], ignore_index=True), hide_index=True)
+
     if already_pushed:
         st.info("Salaries for this month have already been pushed to finance. Viewing mode only.")
         pushed = pd.read_sql(
@@ -273,16 +292,26 @@ with tab_push:
                 ORDER BY e.fullname
             """), engine, params={"m": month_first}
         )
-        st.dataframe(pushed[["fullname", "base", "bonus", "extra", "fine", "net", "note", "created_by", "created_at"]])
+        # Prepare and show pushed table with totals
+        pushed_cols = ["fullname", "base", "bonus", "extra", "fine", "net", "note", "created_by", "created_at"]
+        pushed_display = pushed[pushed_cols].copy()
+        # Add totals row for pushed table
+        pushed_totals = {
+            "fullname": "**Totals**",
+            "base": f"**{pushed_display['base'].sum():,.0f}**",
+            "bonus": f"**{pushed_display['bonus'].sum():,.0f}**",
+            "extra": f"**{pushed_display['extra'].sum():,.0f}**",
+            "fine": f"**{pushed_display['fine'].sum():,.0f}**",
+            "net": f"**{pushed_display['net'].sum():,.0f}**",
+            "note": "",
+            "created_by": "",
+            "created_at": ""
+        }
+        pushed_totals_df = pd.DataFrame([pushed_totals])
+        st.dataframe(pd.concat([pushed_display, pushed_totals_df], ignore_index=True), hide_index=True)
     else:
         st.warning("This will finalize all employee salaries for the selected month. You cannot edit or re-push after this.")
-        # Show preview table with auto notes
-        df_preview = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
-        df_preview["note"] = notes
-        st.dataframe(df_preview)
-
         if st.button("Push all to Finance (Finalize)", type="primary"):
-            # Optional: you can add a simple confirmation checkbox above
             with engine.begin() as con:
                 for idx, row in df.iterrows():
                     eid = int(row["employeeid"])
@@ -311,6 +340,9 @@ with tab_push:
                             "note": note,
                             "created_by": created_by,
                         }
+                    )
+            st.success("Salaries finalized and pushed to finance. This month is now locked.")
+            st.cache_data.clear(); st.rerun()
                     )
             st.success("Salaries finalized and pushed to finance. This month is now locked.")
             st.cache_data.clear(); st.rerun()
