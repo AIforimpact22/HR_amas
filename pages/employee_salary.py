@@ -214,10 +214,10 @@ with tab_raise:
 # ─── Tab 3: Push to Finance ────────────────────────────────────
 with tab_push:
     st.header("📤 Push Monthly Salaries to Finance")
-    # select month
+    # Select month to finalize
     sel_month = st.date_input(
-        "Select month to finalize", 
-        st.session_state.pay_anchor, 
+        "Select month to finalize",
+        st.session_state.pay_anchor,
         key="push_month"
     )
     month_first = sel_month.replace(day=1)
@@ -225,7 +225,7 @@ with tab_push:
     days = (end_d - start_d).days + 1
     req_hours = SHIFT_HOURS * (days - 4)
 
-    # check if already pushed for this month
+    # Check if already pushed for this month
     check_sql = text("""
         SELECT COUNT(*) FROM hr_salary_pushed WHERE month = :m
     """)
@@ -236,10 +236,10 @@ with tab_push:
                f"Required h/emp = {req_hours:.1f} • "
                f"Month status: {'✅ Already pushed' if already_pushed else '🟡 Not yet pushed'}")
 
-    # fetch calculated salaries for this month
+    # Fetch calculated salaries for this month
     df = fetch_month(start_d, end_d, req_hours)
 
-    # get base salary reason (raise/cut note) for each employee as of the first day of month
+    # Get base salary reason (raise/cut note) for each employee as of the first day of month
     base_reasons = {}
     base_sql = text("""
         SELECT employeeid, reason
@@ -264,23 +264,22 @@ with tab_push:
         notes.append(" | ".join(note_parts) if note_parts else "")
 
     # Prepare preview table with totals
-    preview_cols = ["fullname", "base", "bonus", "extra", "fine", "net", "note"]
     df_preview = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
     df_preview["note"] = notes
 
-    # Add totals row
-    totals = {
-        "fullname": "**Totals**",
-        "base": f"**{df_preview['base'].sum():,.0f}**",
-        "bonus": f"**{df_preview['bonus'].sum():,.0f}**",
-        "extra": f"**{df_preview['extra'].sum():,.0f}**",
-        "fine": f"**{df_preview['fine'].sum():,.0f}**",
-        "net": f"**{df_preview['net'].sum():,.0f}**",
+    # Add totals row (numeric)
+    totals_row = {
+        "fullname": "Totals",
+        "base": df_preview["base"].sum(),
+        "bonus": df_preview["bonus"].sum(),
+        "extra": df_preview["extra"].sum(),
+        "fine": df_preview["fine"].sum(),
+        "net": df_preview["net"].sum(),
         "note": ""
     }
-    df_totals = pd.DataFrame([totals])
-    # Show main preview table, then totals row
-    st.dataframe(pd.concat([df_preview, df_totals], ignore_index=True), hide_index=True)
+    df_totals = pd.DataFrame([totals_row])
+    # Concatenate for display
+    df_show = pd.concat([df_preview, df_totals], ignore_index=True)
 
     if already_pushed:
         st.info("Salaries for this month have already been pushed to finance. Viewing mode only.")
@@ -292,25 +291,36 @@ with tab_push:
                 ORDER BY e.fullname
             """), engine, params={"m": month_first}
         )
-        # Prepare and show pushed table with totals
-        pushed_cols = ["fullname", "base", "bonus", "extra", "fine", "net", "note", "created_by", "created_at"]
-        pushed_display = pushed[pushed_cols].copy()
-        # Add totals row for pushed table
-        pushed_totals = {
-            "fullname": "**Totals**",
-            "base": f"**{pushed_display['base'].sum():,.0f}**",
-            "bonus": f"**{pushed_display['bonus'].sum():,.0f}**",
-            "extra": f"**{pushed_display['extra'].sum():,.0f}**",
-            "fine": f"**{pushed_display['fine'].sum():,.0f}**",
-            "net": f"**{pushed_display['net'].sum():,.0f}**",
-            "note": "",
-            "created_by": "",
-            "created_at": ""
+        pushed_preview = pushed[["fullname", "base", "bonus", "extra", "fine", "net", "note"]].copy()
+        pushed_totals_row = {
+            "fullname": "Totals",
+            "base": pushed_preview["base"].sum(),
+            "bonus": pushed_preview["bonus"].sum(),
+            "extra": pushed_preview["extra"].sum(),
+            "fine": pushed_preview["fine"].sum(),
+            "net": pushed_preview["net"].sum(),
+            "note": ""
         }
-        pushed_totals_df = pd.DataFrame([pushed_totals])
-        st.dataframe(pd.concat([pushed_display, pushed_totals_df], ignore_index=True), hide_index=True)
+        pushed_show = pd.concat([pushed_preview, pd.DataFrame([pushed_totals_row])], ignore_index=True)
+        st.dataframe(pushed_show, hide_index=True)
+        st.caption(
+            f"**Totals:** Base: {pushed_totals_row['base']:,.0f} | "
+            f"Bonus: {pushed_totals_row['bonus']:,.0f} | "
+            f"Extra: {pushed_totals_row['extra']:,.0f} | "
+            f"Fine: {pushed_totals_row['fine']:,.0f} | "
+            f"Net: {pushed_totals_row['net']:,.0f}"
+        )
     else:
         st.warning("This will finalize all employee salaries for the selected month. You cannot edit or re-push after this.")
+        st.dataframe(df_show, hide_index=True)
+        st.caption(
+            f"**Totals:** Base: {totals_row['base']:,.0f} | "
+            f"Bonus: {totals_row['bonus']:,.0f} | "
+            f"Extra: {totals_row['extra']:,.0f} | "
+            f"Fine: {totals_row['fine']:,.0f} | "
+            f"Net: {totals_row['net']:,.0f}"
+        )
+
         if st.button("Push all to Finance (Finalize)", type="primary"):
             with engine.begin() as con:
                 for idx, row in df.iterrows():
