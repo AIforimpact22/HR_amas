@@ -239,9 +239,32 @@ with tab_push:
     # fetch calculated salaries for this month
     df = fetch_month(start_d, end_d, req_hours)
 
+    # get base salary reason (raise/cut note) for each employee as of the first day of month
+    base_reasons = {}
+    base_sql = text("""
+        SELECT employeeid, reason
+        FROM hr_salary_history
+        WHERE effective_from <= :month
+          AND (effective_to IS NULL OR effective_to >= :month)
+    """)
+    with engine.connect() as con:
+        for row in con.execute(base_sql, {"month": month_first}):
+            base_reasons[row.employeeid] = row.reason
+
+    # Prepare notes column: combine raise/cut reason and salary adj. reasons
+    notes = []
+    for _, row in df.iterrows():
+        eid = int(row["employeeid"])
+        note_parts = []
+        raise_note = base_reasons.get(eid, "")
+        if raise_note:
+            note_parts.append(f"Raise/Cut: {raise_note}")
+        if row["reasons"]:
+            note_parts.append(f"Adj.: {row['reasons']}")
+        notes.append(" | ".join(note_parts) if note_parts else "")
+
     if already_pushed:
         st.info("Salaries for this month have already been pushed to finance. Viewing mode only.")
-        # show the pushed records (view-only)
         pushed = pd.read_sql(
             text("""
                 SELECT p.*, e.fullname FROM hr_salary_pushed p
@@ -253,51 +276,41 @@ with tab_push:
         st.dataframe(pushed[["fullname", "base", "bonus", "extra", "fine", "net", "note", "created_by", "created_at"]])
     else:
         st.warning("This will finalize all employee salaries for the selected month. You cannot edit or re-push after this.")
-        # notes for each employee
-        notes = {}
-        for _, row in df.iterrows():
-            eid = int(row["employeeid"])
-            notes[eid] = st.text_input(
-                f"Note for {row['fullname']}",
-                key=f"note_{eid}"
-            )
+        # Show preview table with auto notes
+        df_preview = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
+        df_preview["note"] = notes
+        st.dataframe(df_preview)
+
         if st.button("Push all to Finance (Finalize)", type="primary"):
-            # Optional: confirmation step
-            if st.confirm("Are you sure? This will lock all employee salaries for the selected month."):
-                # Insert all
-                with engine.begin() as con:
-                    for _, row in df.iterrows():
-                        eid = int(row["employeeid"])
-                        base = float(row["base"])
-                        bonus = float(row["bonus"])
-                        extra = float(row["extra"])
-                        fine = float(row["fine"])
-                        net = float(row["net"])
-                        note = notes[eid]
-                        created_by = st.session_state.get("user", "hr")
-                        con.execute(
-                            text("""
-                                INSERT INTO hr_salary_pushed
-                                  (employeeid, month, base, bonus, extra, fine, net, note, created_by)
-                                VALUES
-                                  (:eid, :month, :base, :bonus, :extra, :fine, :net, :note, :created_by)
-                            """),
-                            {
-                                "eid": eid,
-                                "month": month_first,
-                                "base": base,
-                                "bonus": bonus,
-                                "extra": extra,
-                                "fine": fine,
-                                "net": net,
-                                "note": note,
-                                "created_by": created_by,
-                            }
-                        )
-                st.success("Salaries finalized and pushed to finance. This month is now locked.")
-                st.cache_data.clear(); st.rerun()
-        else:
-            # Preview table before pushing
-            df_preview = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
-            df_preview["note"] = [notes[int(row["employeeid"])] for _, row in df.iterrows()]
-            st.dataframe(df_preview)
+            # Optional: you can add a simple confirmation checkbox above
+            with engine.begin() as con:
+                for idx, row in df.iterrows():
+                    eid = int(row["employeeid"])
+                    base = float(row["base"])
+                    bonus = float(row["bonus"])
+                    extra = float(row["extra"])
+                    fine = float(row["fine"])
+                    net = float(row["net"])
+                    note = notes[idx]
+                    created_by = st.session_state.get("user", "hr")
+                    con.execute(
+                        text("""
+                            INSERT INTO hr_salary_pushed
+                              (employeeid, month, base, bonus, extra, fine, net, note, created_by)
+                            VALUES
+                              (:eid, :month, :base, :bonus, :extra, :fine, :net, :note, :created_by)
+                        """),
+                        {
+                            "eid": eid,
+                            "month": month_first,
+                            "base": base,
+                            "bonus": bonus,
+                            "extra": extra,
+                            "fine": fine,
+                            "net": net,
+                            "note": note,
+                            "created_by": created_by,
+                        }
+                    )
+            st.success("Salaries finalized and pushed to finance. This month is now locked.")
+            st.cache_data.clear(); st.rerun()
