@@ -291,7 +291,7 @@ with tab_view:
             with c3:
                 if st.button("View", key=f"view_{eid}"):
                     st.session_state.emp_sel = eid
-                    st.experimental_rerun()
+                    st_rerun()
 
         st.markdown("---")
 
