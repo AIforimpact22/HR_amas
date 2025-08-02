@@ -1,49 +1,42 @@
 # employee_management.py  –  Neon + Supabase Storage (private bucket)
 # Streamlit ≥1.27 • supabase • sqlalchemy • pandas
-# ---------------------------------------------------------------
+# ------------------------------------------------------------------
 
 import streamlit as st, pandas as pd, datetime, mimetypes, uuid, os, urllib.parse
 from sqlalchemy import create_engine, text
 from supabase import create_client
 
-# ─── GLOBAL DATES ───────────────────────────────────────────────
+# ─── DATE CONSTANTS ───────────────────────────────────────────────
 TODAY     = datetime.date.today()
 PAST_30   = TODAY - datetime.timedelta(days=365*30)
 FUTURE_30 = TODAY + datetime.timedelta(days=365*30)
-def win(d): return (min(PAST_30, d), max(FUTURE_30, d)) if d else (PAST_30, FUTURE_30)
 
-# ─── SUPABASE (private bucket) ─────────────────────────────────
-_SB     = create_client(st.secrets["supabase"]["url"],
-                        st.secrets["supabase"]["anon"])
-_BUCKET = st.secrets["supabase"]["bucket"]
+# ─── SUPABASE (use *service* key for private bucket writes) ──────
+sb_url   = st.secrets["supabase"]["url"]
+sb_anon  = st.secrets["supabase"]["anon"]
+sb_srv   = st.secrets["supabase"]["service"]
+BUCKET   = st.secrets["supabase"]["bucket"]
+
+_SB      = create_client(sb_url, sb_srv)   # service key → full privileges
 
 def _upload_to_supabase(file_obj, subfolder: str) -> str | None:
-    """
-    Uploads a Streamlit UploadedFile to Supabase Storage and
-    returns a 7-day signed URL. Returns None if file_obj is None.
-    """
+    """Upload and return 7-day signed URL (private bucket)"""
     if file_obj is None:
         return None
-
     ext  = os.path.splitext(file_obj.name)[1] or ""
     key  = f"{subfolder}/{uuid.uuid4().hex}{ext}"
     mime = mimetypes.guess_type(file_obj.name)[0] or "application/octet-stream"
+    _SB.storage.from_(BUCKET).upload(key, file_obj.read(), {"content-type": mime})
+    sig  = _SB.storage.from_(BUCKET).create_signed_url(key, 60*60*24*7)
+    return sig["signedURL"]
 
-    # → IMPORTANT FIX: pass **bytes**, not UploadedFile
-    data_bytes = file_obj.read()
-    _SB.storage.from_(_BUCKET).upload(key, data_bytes,
-                                      {"content-type": mime})
-
-    signed = _SB.storage.from_(_BUCKET).create_signed_url(key, 60*60*24*7)
-    return signed["signedURL"]
-
-# ─── POSTGRES (cached) ─────────────────────────────────────────
+# ─── POSTGRES ENGINE (cached) ─────────────────────────────────────
 if "pg_engine" not in st.session_state:
     st.session_state.pg_engine = create_engine(
         st.secrets["neon"]["dsn"], pool_pre_ping=True, echo=False)
 engine = st.session_state.pg_engine
 
-# ─── DB HELPERS ────────────────────────────────────────────────
+# ─── DB HELPERS ───────────────────────────────────────────────────
 def get_all_employees():
     return pd.read_sql("SELECT * FROM hr_employee ORDER BY employeeid DESC", engine)
 
@@ -63,11 +56,9 @@ def add_employee_with_salary(emp: dict, base: float):
             :employee_state, :photo_url
         ) RETURNING employeeid
     """)
-    sql_sal = text("""
-        INSERT INTO hr_salary_history
-              (employeeid, salary, effective_from, reason)
-        VALUES (:eid, :sal, :eff, 'Initial contract rate')
-    """)
+    sql_sal = text("""INSERT INTO hr_salary_history
+                      (employeeid, salary, effective_from, reason)
+                      VALUES (:eid, :sal, :eff, 'Initial contract rate')""")
     with engine.begin() as conn:
         eid = conn.execute(sql_emp, emp).scalar()
         conn.execute(sql_sal, {"eid": eid, "sal": base, "eff": emp["employment_date"]})
@@ -87,56 +78,50 @@ def search_employees(term: str):
     """)
     return pd.read_sql(sql, engine, params={"s": f"%{term}%"})
 
-# ─── UI SETUP ───────────────────────────────────────────────────
+# ─── STREAMLIT SETUP ─────────────────────────────────────────────
 st.set_page_config("Employee Mgmt", "👥", layout="wide")
 tab_add, tab_edit, tab_view = st.tabs(["➕ Add", "📝 Edit", "🔎 Search"])
 
-# ========== ADD TAB =========================================================
+# =================================================================
+# ➕  ADD
+# =================================================================
 with tab_add:
     with st.form("add"):
         c1, c2 = st.columns(2)
-        # left
         with c1:
-            fullname        = st.text_input("Full Name *")
-            department      = st.text_input("Department")
-            position        = st.text_input("Position")
-            phone_no        = st.text_input("Phone")
-            emergency_phone_no  = st.text_input("Emergency Phone")
+            fullname = st.text_input("Full Name *")
+            department = st.text_input("Department")
+            position = st.text_input("Position")
+            phone_no = st.text_input("Phone")
+            emergency_phone_no = st.text_input("Emergency Phone")
             supervisor_phone_no = st.text_input("Supervisor Phone")
-            address         = st.text_area("Address")
-            date_of_birth   = st.date_input("Date of Birth *",
-                                            value=TODAY,
-                                            min_value=PAST_30,
-                                            max_value=TODAY)
-            employment_date = st.date_input("Employment Date *",
-                                            value=TODAY,
-                                            min_value=PAST_30,
-                                            max_value=TODAY)
-            basicsalary     = st.number_input("Basic Salary *", min_value=0.0, step=1000.0)
-            health_condition= st.text_input("Health Condition")
-            family_members  = st.number_input("Family Members", min_value=0)
-            education_degree= st.text_input("Education Degree")
-            language        = st.text_input("Languages")
-        # right
+            address = st.text_area("Address")
+            date_of_birth = st.date_input("Date of Birth *", value=TODAY,
+                                          min_value=PAST_30, max_value=TODAY)
+            employment_date = st.date_input("Employment Date *", value=TODAY,
+                                            min_value=PAST_30, max_value=TODAY)
+            basicsalary = st.number_input("Basic Salary *", min_value=0.0, step=1000.0)
+            health_condition = st.text_input("Health Condition")
+            family_members = st.number_input("Family Members", min_value=0)
+            education_degree = st.text_input("Education Degree")
+            language = st.text_input("Languages")
         with c2:
-            cv_up  = st.file_uploader("CV (PDF)", type=["pdf"])
-            id_up  = st.file_uploader("National ID (image)", type=["jpg","jpeg","png"])
+            cv_up = st.file_uploader("CV (PDF)", type=["pdf"])
+            id_up = st.file_uploader("National ID (image)", type=["jpg","jpeg","png"])
             national_id_no = st.number_input("National ID No", min_value=0)
-            email  = st.text_input("Email")
+            email = st.text_input("Email")
             ss_registration_date = st.date_input("SS Registration Date",
-                                                 value=TODAY,
-                                                 min_value=PAST_30,
-                                                 max_value=TODAY)
-            assurance       = st.number_input("Assurance", min_value=0.0, step=1000.0)
+                                                 value=TODAY, min_value=PAST_30, max_value=TODAY)
+            assurance = st.number_input("Assurance", min_value=0.0, step=1000.0)
             assurance_state = st.selectbox("Assurance State", ["active","repaid"])
-            employee_state  = st.selectbox("Employee State", ["active","resigned","terminated"])
-            photo_up        = st.file_uploader("Profile Photo", type=["jpg","jpeg","png"])
+            employee_state = st.selectbox("Employee State", ["active","resigned","terminated"])
+            photo_up = st.file_uploader("Profile Photo", type=["jpg","jpeg","png"])
 
         if st.form_submit_button("Add"):
             if not fullname.strip() or basicsalary <= 0:
-                st.error("Name and positive salary are required."); st.stop()
+                st.error("Name and positive salary required."); st.stop()
 
-            emp_payload = dict(
+            emp = dict(
                 fullname=fullname, department=department, position=position,
                 phone_no=phone_no, emergency_phone_no=emergency_phone_no,
                 supervisor_phone_no=supervisor_phone_no, address=address,
@@ -150,9 +135,8 @@ with tab_add:
                 assurance_state=assurance_state, employee_state=employee_state,
                 photo_url=_upload_to_supabase(photo_up, "photo"),
             )
-            add_employee_with_salary(emp_payload, basicsalary)
-            st.success("Employee added – files stored in Supabase Storage!")
-
+            add_employee_with_salary(emp, basicsalary)
+            st.success("Employee added – files stored in Supabase!")
 # ========== EDIT TAB ========================================================
 with tab_edit:
     df = get_all_employees()
