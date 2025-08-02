@@ -227,19 +227,19 @@ with tab_edit:
             st.success("Employee data updated (salary unchanged).")
 
 
-# ---------- VIEW / SEARCH  (CARD LIST → DETAILS) ----------
+# ---------- VIEW / SEARCH  (Professional two-column layout) ----------
 with tab_view:
 
-    # ░░ 1 | Search bar ░░
-    q = st.text_input("🔍 Search employee (name / email / phone)")
+    # ░░ 1 · Search bar ░░
+    q = st.text_input("🔍  Search employee (name, email, phone)")
 
-    # ░░ 2 | Fetch rows ░░
+    # ░░ 2 · Load matching rows ░░
     df = search_employees(q) if q else get_all_employees()
     if df.empty:
         st.info("No matches.")
         st.stop()
 
-    # map of current salaries
+    # current salaries map
     sal_map = (
         pd.read_sql(
             "SELECT employeeid, salary "
@@ -251,86 +251,86 @@ with tab_view:
     )
 
     # remember selection across rerenders
-    sel_key = "emp_sel"
-    if sel_key not in st.session_state:
-        st.session_state[sel_key] = None
-    selected_id = st.session_state[sel_key]
+    if "emp_sel" not in st.session_state:
+        st.session_state.emp_sel = None
 
-    # helper ─ show photo or placeholder
-    def show_img(path: str, width: int = 60):
+    # helper: show image or remote placeholder
+    def show_img(path: str, width: int = 90):
         if path and os.path.exists(path):
             st.image(path, width=width)
         else:
-            st.image(  # remote placeholder
-                f"https://placehold.co/{width}x{width}.png?text=No+Photo",
-                width=width,
-            )
+            st.image(f"https://placehold.co/{width}x{width}.png?text=No+Photo", width=width)
 
-    # ░░ 3 | Thumbnail card list ░░
-    st.markdown("### Results")
-    for _, r in df.iterrows():
-        eid = int(r.employeeid)
-        with st.container():
-            c1, c2, c3 = st.columns([1, 4, 1], gap="small")
+    # ░░ 3 · Layout: list (left) · details (right) ░░
+    list_col, detail_col = st.columns([2, 3], gap="large")
 
-            with c1:
-                show_img(r.photo_url, 60)
+    # ── LEFT COLUMN – clickable result cards ─────────────────────────────
+    with list_col:
+        st.markdown("### Results")
+        for _, r in df.iterrows():
+            eid = int(r.employeeid)
+            with st.container(border=True):
+                c1, c2 = st.columns([1, 3], gap="small")
+                with c1:
+                    show_img(r.photo_url, 70)
+                with c2:
+                    st.markdown(
+                        f"**{r.fullname}**  \n"
+                        f"{r.position or '-'} – {r.department or '-'}  \n"
+                        f"`{r.employee_state}`",
+                    )
+                # clicking anywhere on the card selects the employee
+                if st.button("View", key=f"btn_{eid}", use_container_width=True):
+                    st.session_state.emp_sel = eid
+            st.write("")  # tiny spacer
 
-            with c2:
-                st.markdown(
-                    f"**{r.fullname}**  \n"
-                    f"{r.position or '-'} · {r.department or '-'}  \n"
-                    f"Status: `{r.employee_state}`",
-                    help=f"Employee ID {eid}",
-                )
+    # ── RIGHT COLUMN – full profile ──────────────────────────────────────
+    with detail_col:
+        sel_id = st.session_state.get("emp_sel")
 
-            with c3:
-                # pressing the button sets selection in session state
-                if st.button("View", key=f"view_{eid}"):
-                    selected_id = eid
-                    st.session_state[sel_key] = eid
+        if sel_id is None:
+            st.info("Click **View** to see the full profile.")
+        elif sel_id not in df.employeeid.values:
+            st.warning("Selected employee not in current result set.")
+        else:
+            r = df.loc[df.employeeid == sel_id].iloc[0]
 
-        st.markdown("---")
+            st.subheader(r.fullname)
+            top1, top2 = st.columns([1, 2], gap="large")
 
-    # ░░ 4 | Details panel ░░
-    if selected_id is not None and selected_id in df.employeeid.values:
-        r = df.loc[df.employeeid == selected_id].iloc[0]
+            # photo + quick KPIs
+            with top1:
+                show_img(r.photo_url, 180)
+                st.metric("Current salary",
+                          f"Rp {sal_map.get(sel_id, 0):,.0f}")
+                st.metric("Assurance",
+                          f"Rp {(r.assurance or 0):,.0f} ({r.assurance_state})")
+                st.markdown(f"**Status:** `{r.employee_state}`")
 
-        st.markdown("## Employee Details")
-        d1, d2 = st.columns([1, 2], gap="large")
-
-        # left column – photo + quick KPIs
-        with d1:
-            show_img(r.photo_url, 180)
-            st.metric("Current salary",
-                      f"Rp {sal_map.get(selected_id, 0):,.0f}")
-            st.metric("Assurance",
-                      f"Rp {(r.assurance or 0):,.0f} ({r.assurance_state})")
-            st.markdown(f"**Status:** `{r.employee_state}`")
-
-        # right column – full info table style
-        with d2:
-            info = {
-                "Department": r.department,
-                "Position": r.position,
-                "Phone": r.phone_no,
-                "Email": r.email,
-                "Supervisor phone": r.supervisor_phone_no,
-                "Emergency phone": r.emergency_phone_no,
-                "Date of Birth": r.date_of_birth,
-                "Employment date": r.employment_date,
-                "Languages": r.language,
-                "Education": r.education_degree,
-                "Health condition": r.health_condition,
-                "Family members": r.family_members,
-                "National ID No": r.national_id_no,
-                "Social Security registration": r.ss_registration_date,
-            }
-            for k, v in info.items():
-                st.markdown(f"**{k}:**  {v or '-'}")
+            # detailed info list
+            with top2:
+                info = {
+                    "Department": r.department,
+                    "Position": r.position,
+                    "Phone": r.phone_no,
+                    "Email": r.email,
+                    "Supervisor phone": r.supervisor_phone_no,
+                    "Emergency phone": r.emergency_phone_no,
+                    "Date of Birth": r.date_of_birth,
+                    "Employment date": r.employment_date,
+                    "Languages": r.language,
+                    "Education": r.education_degree,
+                    "Health condition": r.health_condition,
+                    "Family members": r.family_members,
+                    "National ID No": r.national_id_no,
+                    "SS registration": r.ss_registration_date,
+                }
+                st.markdown("### Profile")
+                for k, v in info.items():
+                    st.markdown(f"**{k}:**  {v or '-'}")
 
             st.markdown("---")
-            # attachments
+            # attachments row
             for label, path in [
                 ("📄 Download CV", r.cv_url),
                 ("🪪 Download National ID", r.national_id_image_url),
@@ -341,5 +341,5 @@ with tab_view:
                             label,
                             f,
                             file_name=os.path.basename(path),
-                            key=f"dl_{label}_{selected_id}",
+                            key=f"dl_{label}_{sel_id}",
                         )
