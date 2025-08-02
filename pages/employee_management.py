@@ -227,112 +227,119 @@ with tab_edit:
             st.success("Employee data updated (salary unchanged).")
 
 
-# ---------- VIEW / SEARCH  (FIXED) ----------
-def _show_employee_details(row: pd.Series, salary_map: dict):
-    st.markdown("---")
-    st.subheader(row.fullname)
-
-    c1, c2 = st.columns([1, 2], gap="large")
-    with c1:
-        img_path = (
-            row.photo_url
-            if row.photo_url and os.path.exists(row.photo_url)
-            else "static/no_avatar.png"
-        )
-        st.image(img_path, width=180)
-        st.metric("Current salary",
-                  f"Rp {salary_map.get(int(row.employeeid), 0):,.0f}")
-        st.metric("Assurance",
-                  f"Rp {(row.assurance or 0):,.0f} ({row.assurance_state})")
-        st.markdown(f"**Status:** `{row.employee_state}`")
-
-    with c2:
-        info = {
-            "Department": row.department,
-            "Position": row.position,
-            "Phone": row.phone_no,
-            "Email": row.email,
-            "Supervisor": row.supervisor_phone_no,
-            "Emergency": row.emergency_phone_no,
-            "DOB": row.date_of_birth,
-            "Employment": row.employment_date,
-            "Languages": row.language,
-            "Education": row.education_degree,
-            "Health": row.health_condition,
-            "Family members": row.family_members,
-        }
-        for k, v in info.items():
-            st.markdown(f"**{k}:**  {v or '-'}")
-
-        for label, path in (
-            ("📄 CV", row.cv_url),
-            ("🪪 National ID", row.national_id_image_url),
-        ):
-            if path and os.path.exists(path):
-                with open(path, "rb") as f:
-                    st.download_button(label, f,
-                        file_name=os.path.basename(path),
-                        key=f"dl_{label}_{row.employeeid}"
-                    )
-
+# ---------- VIEW / SEARCH  (CARD + DETAILS) ----------
 with tab_view:
-    df_all = get_all_employees()
-    if df_all.empty:
-        st.info("No employees.")
-        st.stop()
 
-    with st.sidebar:
-        q = st.text_input("🔍 Search (name / email / phone)")
-        sel_dept = st.multiselect("Department",
-                                  sorted(df_all.department.dropna().unique()))
-        sel_state = st.multiselect("Status",
-                                   ["active", "resigned", "terminated"])
+    # ░░ SEARCH BAR ░░
+    q = st.text_input("🔍  Search employee (name / email / phone)")
 
-    df = df_all.copy()
-    if q:
-        ql = q.lower()
-        df = df[
-            df.fullname.str.lower().str.contains(ql)
-            | df.email.fillna("").str.lower().str.contains(ql)
-            | df.phone_no.fillna("").str.contains(ql)
-        ]
-    if sel_dept:
-        df = df[df.department.isin(sel_dept)]
-    if sel_state:
-        df = df[df.employee_state.isin(sel_state)]
-
+    # ░░ FETCH DATA ░░
+    df = search_employees(q) if q else get_all_employees()
     if df.empty:
         st.info("No matches.")
         st.stop()
 
-    sal_map = pd.read_sql(
-        "SELECT employeeid, salary FROM hr_salary_history "
-        "WHERE effective_to IS NULL", engine
-    ).set_index("employeeid")["salary"].to_dict()
-
-    df["salary"] = df.employeeid.map(lambda x: sal_map.get(int(x), 0))
-    df["photo"] = df.photo_url
-
-    grid = st.data_editor(
-        df[["photo", "fullname", "position",
-            "department", "salary", "employee_state"]],
-        key="emp_grid",
-        hide_index=True,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "photo": st.column_config.ImageColumn(   # ⬅ removed css_style
-                "Photo", width="60px"                # ⬅ keep width only
-            ),
-            "salary": st.column_config.NumberColumn(
-                "Salary", format="Rp {:,.0f}"
-            ),
-            "employee_state": st.column_config.SelectboxColumn(
-                "Status", options=["active", "resigned", "terminated"]
-            ),
-        },
+    # map of current salaries
+    sal_map = (
+        pd.read_sql(
+            "SELECT employeeid, salary FROM hr_salary_history WHERE effective_to IS NULL",
+            engine,
+        )
+        .set_index("employeeid")["salary"]
+        .to_dict()
     )
 
-    sel_rows = grid.get("selected_row_indices", [])
-    if sel_rows:
-        _show_employee_details(df.iloc[sel_rows[0]], sal_map)
+    # ensure a selected-id key exists
+    st.session_state.setdefault("emp_sel", None)
+
+    # ░░ THUMBNAIL CARD LIST ░░
+    st.markdown("### Results")
+    for _, r in df.iterrows():
+        eid = int(r.employeeid)
+
+        # one card per employee
+        with st.container():
+            c1, c2, c3 = st.columns([1, 4, 1], gap="small")
+
+            # --- photo thumb ---
+            with c1:
+                img = (
+                    r.photo_url
+                    if r.photo_url and os.path.exists(r.photo_url)
+                    else "static/no_avatar.png"
+                )
+                st.image(img, width=60)
+
+            # --- brief info ---
+            with c2:
+                st.markdown(
+                    f"**{r.fullname}**  \n"
+                    f"{r.position or '-'} · {r.department or '-'}  \n"
+                    f"Status: `{r.employee_state}`",
+                    help=f"Employee ID {eid}",
+                )
+
+            # --- view button ---
+            with c3:
+                if st.button("View", key=f"view_{eid}"):
+                    st.session_state.emp_sel = eid
+                    st.experimental_rerun()      # refresh to jump to details
+
+        st.markdown("---")
+
+    # ░░ DETAILS PANEL ░░
+    sel_id = st.session_state.get("emp_sel")
+    if sel_id is not None and sel_id in df.employeeid.values:
+        row = df[df.employeeid == sel_id].iloc[0]
+        st.markdown("## Employee Details")
+        d1, d2 = st.columns([1, 2], gap="large")
+
+        # left: portrait + quick KPIs
+        with d1:
+            img_big = (
+                row.photo_url
+                if row.photo_url and os.path.exists(row.photo_url)
+                else "static/no_avatar.png"
+            )
+            st.image(img_big, width=180)
+            st.metric("Current salary",
+                      f"Rp {sal_map.get(sel_id,0):,.0f}")
+            st.metric("Assurance",
+                      f"Rp {(row.assurance or 0):,.0f} ({row.assurance_state})")
+            st.markdown(f"**Status:** `{row.employee_state}`")
+
+        # right: full info table-style
+        with d2:
+            info = {
+                "Department": row.department,
+                "Position": row.position,
+                "Phone": row.phone_no,
+                "Email": row.email,
+                "Supervisor phone": row.supervisor_phone_no,
+                "Emergency phone": row.emergency_phone_no,
+                "Date of Birth": row.date_of_birth,
+                "Employment date": row.employment_date,
+                "Languages": row.language,
+                "Education": row.education_degree,
+                "Health condition": row.health_condition,
+                "Family members": row.family_members,
+                "National ID No": row.national_id_no,
+                "Social Security registration": row.ss_registration_date,
+            }
+            for k, v in info.items():
+                st.markdown(f"**{k}:**  {v or '-'}")
+
+            st.markdown("---")
+            # attachments
+            for label, path in [
+                ("📄 Download CV", row.cv_url),
+                ("🪪 Download National ID", row.national_id_image_url),
+            ]:
+                if path and os.path.exists(path):
+                    with open(path, "rb") as f:
+                        st.download_button(
+                            label,
+                            f,
+                            file_name=os.path.basename(path),
+                            key=f"dl_{label}_{sel_id}",
+                        )
