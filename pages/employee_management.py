@@ -227,65 +227,130 @@ with tab_edit:
             st.success("Employee data updated (salary unchanged).")
 
 
-# ---------- VIEW / SEARCH ----------
-with tab_view:
-    q = st.text_input("Search")
+# ---------- VIEW / SEARCH  (NEW) ----------
+# helper to render the right-side details drawer
+def _show_employee_details(row: pd.Series, salary_map: dict):
+    st.markdown("---")
+    st.subheader(row.fullname)
 
-    # base employee rows
-    data = search_employees(q) if q else get_all_employees()
-    if data.empty:
+    c1, c2 = st.columns([1, 2], gap="large")
+
+    # ── left column ───────────────────────────────────────────
+    with c1:
+        img_path = (
+            row.photo_url
+            if row.photo_url and os.path.exists(row.photo_url)
+            else "static/no_avatar.png"      # make /static/no_avatar.png once
+        )
+        st.image(img_path, width=180, caption="Profile")
+
+        st.metric("Current salary",
+                  f"Rp {salary_map.get(int(row.employeeid), 0):,.0f}")
+        st.metric("Assurance",
+                  f"Rp {(row.assurance or 0):,.0f} ({row.assurance_state})")
+        st.markdown(f"**Status:** `{row.employee_state}`")
+
+    # ── right column ──────────────────────────────────────────
+    with c2:
+        info = {
+            "Department": row.department,
+            "Position": row.position,
+            "Phone": row.phone_no,
+            "Email": row.email,
+            "Supervisor": row.supervisor_phone_no,
+            "Emergency": row.emergency_phone_no,
+            "DOB": row.date_of_birth,
+            "Employment": row.employment_date,
+            "Languages": row.language,
+            "Education": row.education_degree,
+            "Health": row.health_condition,
+            "Family members": row.family_members,
+        }
+        for k, v in info.items():
+            st.markdown(f"**{k}:**  {v or '-'}")
+
+        # attachments
+        for label, path in (
+            ("📄 CV", row.cv_url),
+            ("🪪 National ID", row.national_id_image_url),
+        ):
+            if path and os.path.exists(path):
+                with open(path, "rb") as f:
+                    st.download_button(label, f,
+                        file_name=os.path.basename(path),
+                        key=f"dl_{label}_{row.employeeid}"
+                    )
+
+# ── main panel ────────────────────────────────────────────────
+with tab_view:
+    # pull all employees once for filters + grid
+    df_all = get_all_employees()
+    if df_all.empty:
+        st.info("No employees.")
+        st.stop()
+
+    # sidebar filters
+    with st.sidebar:
+        q = st.text_input("🔍 Search (name / email / phone)")
+        dept_opts = sorted([d for d in df_all.department.dropna().unique()])
+        state_opts = ["active", "resigned", "terminated"]
+        sel_dept = st.multiselect("Department", dept_opts)
+        sel_state = st.multiselect("Status", state_opts)
+
+    # apply filters
+    df = df_all.copy()
+
+    if q:
+        ql = q.lower()
+        df = df[
+            df.fullname.str.lower().str.contains(ql)
+            | df.email.fillna("").str.lower().str.contains(ql)
+            | df.phone_no.fillna("").str.contains(ql)
+        ]
+
+    if sel_dept:
+        df = df[df.department.isin(sel_dept)]
+    if sel_state:
+        df = df[df.employee_state.isin(sel_state)]
+
+    if df.empty:
         st.info("No matches.")
         st.stop()
 
-    # fetch current base‑salary per employeeid
-    sal_df = pd.read_sql(
-        """
-        SELECT employeeid, salary
-        FROM   hr_salary_history
-        WHERE  effective_to IS NULL
-        """,
+    # salaries (current)
+    sal_map = pd.read_sql(
+        "SELECT employeeid, salary "
+        "FROM hr_salary_history "
+        "WHERE effective_to IS NULL",
         engine,
+    ).set_index("employeeid")["salary"].to_dict()
+
+    # prepare grid dataframe
+    df["salary"] = df.employeeid.map(lambda x: sal_map.get(int(x), 0))
+    df["photo"] = df.photo_url         # alias for ImageColumn
+
+    grid = st.data_editor(
+        df[["photo", "fullname", "position",
+            "department", "salary", "employee_state"]],
+        key="emp_grid",
+        hide_index=True,
+        num_rows="dynamic",            # built-in pagination
+        use_container_width=True,
+        column_config={
+            "photo": st.column_config.ImageColumn(
+                "Photo", width="60px",
+                css_style="border-radius:50%;object-fit:cover;"
+            ),
+            "salary": st.column_config.NumberColumn(
+                "Salary", format="Rp {:,.0f}"
+            ),
+            "employee_state": st.column_config.SelectboxColumn(
+                "Status", options=state_opts
+            ),
+        },
     )
-    current_sal = dict(zip(sal_df.employeeid, sal_df.salary))
 
-    for _, r in data.iterrows():
-        cur_salary = current_sal.get(int(r.employeeid), 0)
-        sal_str = f"{cur_salary:,.0f}"
-        assurance_str = f"{(r.assurance or 0):,.0f}"
-
-        with st.expander(f"{r.fullname} — {r.position or '-'}"):
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                if r.photo_url and os.path.exists(r.photo_url):
-                    st.image(r.photo_url, width=150)
-                elif r.photo_url:
-                    st.write("Photo file:", os.path.basename(r.photo_url))
-            with c2:
-                st.markdown(
-                    f"""
-**Dept:** {r.department or '-'}   **Phone:** {r.phone_no or '-'}   **Email:** {r.email or '-'}  
-**DOB:** {r.date_of_birth}   **Employment:** {r.employment_date}  
-**Salary:** {sal_str}   **State:** {r.employee_state}  
-**Assurance:** {assurance_str} ({r.assurance_state})  
-**Languages:** {r.language or '-'}
-"""
-                )
-            # attachments
-            if r.cv_url and os.path.exists(r.cv_url):
-                with open(r.cv_url, "rb") as f:
-                    st.download_button(
-                        "📄 CV",
-                        data=f,
-                        file_name=os.path.basename(r.cv_url),
-                    )
-            elif r.cv_url:
-                st.write("CV file:", os.path.basename(r.cv_url))
-            if r.national_id_image_url and os.path.exists(r.national_id_image_url):
-                with open(r.national_id_image_url, "rb") as f:
-                    st.download_button(
-                        "🪪 National ID",
-                        data=f,
-                        file_name=os.path.basename(r.national_id_image_url),
-                    )
-            elif r.national_id_image_url:
-                st.write("ID image:", os.path.basename(r.national_id_image_url))
+    # anything selected? → details drawer
+    sel_rows = grid.get("selected_row_indices", [])
+    if sel_rows:
+        _show_employee_details(df.iloc[sel_rows[0]], sal_map)
