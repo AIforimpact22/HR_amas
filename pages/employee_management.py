@@ -227,30 +227,25 @@ with tab_edit:
             st.success("Employee data updated (salary unchanged).")
 
 
-# ---------- VIEW / SEARCH  (NEW) ----------
-# helper to render the right-side details drawer
+# ---------- VIEW / SEARCH  (FIXED) ----------
 def _show_employee_details(row: pd.Series, salary_map: dict):
     st.markdown("---")
     st.subheader(row.fullname)
 
     c1, c2 = st.columns([1, 2], gap="large")
-
-    # ── left column ───────────────────────────────────────────
     with c1:
         img_path = (
             row.photo_url
             if row.photo_url and os.path.exists(row.photo_url)
-            else "static/no_avatar.png"      # make /static/no_avatar.png once
+            else "static/no_avatar.png"
         )
-        st.image(img_path, width=180, caption="Profile")
-
+        st.image(img_path, width=180)
         st.metric("Current salary",
                   f"Rp {salary_map.get(int(row.employeeid), 0):,.0f}")
         st.metric("Assurance",
                   f"Rp {(row.assurance or 0):,.0f} ({row.assurance_state})")
         st.markdown(f"**Status:** `{row.employee_state}`")
 
-    # ── right column ──────────────────────────────────────────
     with c2:
         info = {
             "Department": row.department,
@@ -269,7 +264,6 @@ def _show_employee_details(row: pd.Series, salary_map: dict):
         for k, v in info.items():
             st.markdown(f"**{k}:**  {v or '-'}")
 
-        # attachments
         for label, path in (
             ("📄 CV", row.cv_url),
             ("🪪 National ID", row.national_id_image_url),
@@ -281,25 +275,20 @@ def _show_employee_details(row: pd.Series, salary_map: dict):
                         key=f"dl_{label}_{row.employeeid}"
                     )
 
-# ── main panel ────────────────────────────────────────────────
 with tab_view:
-    # pull all employees once for filters + grid
     df_all = get_all_employees()
     if df_all.empty:
         st.info("No employees.")
         st.stop()
 
-    # sidebar filters
     with st.sidebar:
         q = st.text_input("🔍 Search (name / email / phone)")
-        dept_opts = sorted([d for d in df_all.department.dropna().unique()])
-        state_opts = ["active", "resigned", "terminated"]
-        sel_dept = st.multiselect("Department", dept_opts)
-        sel_state = st.multiselect("Status", state_opts)
+        sel_dept = st.multiselect("Department",
+                                  sorted(df_all.department.dropna().unique()))
+        sel_state = st.multiselect("Status",
+                                   ["active", "resigned", "terminated"])
 
-    # apply filters
     df = df_all.copy()
-
     if q:
         ql = q.lower()
         df = df[
@@ -307,7 +296,6 @@ with tab_view:
             | df.email.fillna("").str.lower().str.contains(ql)
             | df.phone_no.fillna("").str.contains(ql)
         ]
-
     if sel_dept:
         df = df[df.department.isin(sel_dept)]
     if sel_state:
@@ -317,40 +305,34 @@ with tab_view:
         st.info("No matches.")
         st.stop()
 
-    # salaries (current)
     sal_map = pd.read_sql(
-        "SELECT employeeid, salary "
-        "FROM hr_salary_history "
-        "WHERE effective_to IS NULL",
-        engine,
+        "SELECT employeeid, salary FROM hr_salary_history "
+        "WHERE effective_to IS NULL", engine
     ).set_index("employeeid")["salary"].to_dict()
 
-    # prepare grid dataframe
     df["salary"] = df.employeeid.map(lambda x: sal_map.get(int(x), 0))
-    df["photo"] = df.photo_url         # alias for ImageColumn
+    df["photo"] = df.photo_url
 
     grid = st.data_editor(
         df[["photo", "fullname", "position",
             "department", "salary", "employee_state"]],
         key="emp_grid",
         hide_index=True,
-        num_rows="dynamic",            # built-in pagination
+        num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "photo": st.column_config.ImageColumn(
-                "Photo", width="60px",
-                css_style="border-radius:50%;object-fit:cover;"
+            "photo": st.column_config.ImageColumn(   # ⬅ removed css_style
+                "Photo", width="60px"                # ⬅ keep width only
             ),
             "salary": st.column_config.NumberColumn(
                 "Salary", format="Rp {:,.0f}"
             ),
             "employee_state": st.column_config.SelectboxColumn(
-                "Status", options=state_opts
+                "Status", options=["active", "resigned", "terminated"]
             ),
         },
     )
 
-    # anything selected? → details drawer
     sel_rows = grid.get("selected_row_indices", [])
     if sel_rows:
         _show_employee_details(df.iloc[sel_rows[0]], sal_map)
