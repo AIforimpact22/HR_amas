@@ -1,4 +1,4 @@
-# employee_management.py  –  Neon + Supabase Storage (private bucket) – correct file downloads
+# employee_management.py  –  Neon + Supabase Storage (private bucket) – stable upload/download
 # Requires: streamlit ≥1.27, supabase-py, sqlalchemy, pandas
 # ------------------------------------------------------------------
 
@@ -6,17 +6,21 @@ import streamlit as st, pandas as pd, datetime, mimetypes, uuid, os, urllib.pars
 from sqlalchemy import create_engine, text
 from supabase import create_client
 
-# ─── DATES ───────────────────────────────────────────────────────
-TODAY, PAST_30 = datetime.date.today(), datetime.date.today() - datetime.timedelta(days=365*30)
+# ─── DATE CONSTANTS ──────────────────────────────────────────────
+TODAY     = datetime.date.today()
+PAST_30   = TODAY - datetime.timedelta(days=365*30)
 FUTURE_30 = TODAY + datetime.timedelta(days=365*30)
 
-# ─── SUPABASE (service key -> full perms) ────────────────────────
+# ─── KEEP A SAFE HANDLE TO THE ORIGINAL FILE UPLOADER ───────────
+file_uploader = st.file_uploader   # ← alias prevents later mutation issues
+
+# ─── SUPABASE (service key) ─────────────────────────────────────
 sb_conf  = st.secrets["supabase"]
-_SB      = create_client(sb_conf["url"], sb_conf["service"])
+_SB      = create_client(sb_conf["url"], sb_conf["service"])   # FULL perms
 BUCKET   = sb_conf["bucket"]
 
 def _upload_to_supabase(file_obj, subfolder):
-    """Upload file bytes → 7-day signed URL (private bucket)."""
+    """Upload bytes → 7-day signed URL (private bucket)"""
     if file_obj is None:
         return None
     ext  = os.path.splitext(file_obj.name)[1] or ""
@@ -25,7 +29,7 @@ def _upload_to_supabase(file_obj, subfolder):
     _SB.storage.from_(BUCKET).upload(key, file_obj.read(), {"content-type": mime})
     return _SB.storage.from_(BUCKET).create_signed_url(key, 60*60*24*7)["signedURL"]
 
-# ─── POSTGRES ────────────────────────────────────────────────────
+# ─── POSTGRES ENGINE ────────────────────────────────────────────
 if "pg_engine" not in st.session_state:
     st.session_state.pg_engine = create_engine(st.secrets["neon"]["dsn"], pool_pre_ping=True)
 engine = st.session_state.pg_engine
@@ -34,7 +38,6 @@ def get_all_employees():
     return pd.read_sql("SELECT * FROM hr_employee ORDER BY employeeid DESC", engine)
 
 def add_employee_with_salary(emp, base):
-    eid = None
     with engine.begin() as conn:
         eid = conn.execute(text("""INSERT INTO hr_employee (
             fullname, department, position, phone_no, emergency_phone_no, supervisor_phone_no,
@@ -54,10 +57,10 @@ def add_employee_with_salary(emp, base):
     return eid
 
 def update_employee(eid, **cols):
-    sets = ", ".join([f"{k}=:{k}" for k in cols])
-    cols["eid"] = eid
     with engine.begin() as conn:
-        conn.execute(text(f"UPDATE hr_employee SET {sets} WHERE employeeid=:eid"), cols)
+        conn.execute(text("UPDATE hr_employee SET " +
+                    ", ".join(f"{k}=:{k}" for k in cols) +
+                    " WHERE employeeid=:eid"), {**cols, "eid": eid})
 
 def search_employees(term):
     return pd.read_sql(text("""
@@ -66,11 +69,11 @@ def search_employees(term):
            OR phone_no ILIKE :s OR supervisor_phone_no ILIKE :s OR emergency_phone_no ILIKE :s
         ORDER BY employeeid DESC"""), engine, params={"s": f"%{term}%"})
 
-# ─── STREAMLIT PAGE ──────────────────────────────────────────────
+# ─── STREAMLIT UI ───────────────────────────────────────────────
 st.set_page_config("Employee Mgmt", "👥", layout="wide")
 tab_add, tab_edit, tab_view = st.tabs(["➕ Add", "📝 Edit", "🔎 Search"])
 
-# ========== ADD =============================================================
+# ---------------------- ADD TAB ---------------------------------
 with tab_add:
     with st.form("add"):
         c1, c2 = st.columns(2)
@@ -82,18 +85,16 @@ with tab_add:
             emergency_phone_no = st.text_input("Emergency Phone")
             supervisor_phone_no = st.text_input("Supervisor Phone")
             address = st.text_area("Address")
-            date_of_birth   = st.date_input("Date of Birth *", value=TODAY,
-                                            min_value=PAST_30, max_value=TODAY)
-            employment_date = st.date_input("Employment Date *", value=TODAY,
-                                            min_value=PAST_30, max_value=TODAY)
+            date_of_birth   = st.date_input("Date of Birth *", value=TODAY, min_value=PAST_30, max_value=TODAY)
+            employment_date = st.date_input("Employment Date *", value=TODAY, min_value=PAST_30, max_value=TODAY)
             basicsalary = st.number_input("Basic Salary *", min_value=0.0, step=1000.0)
             health_condition = st.text_input("Health Condition")
             family_members = st.number_input("Family Members", min_value=0)
             education_degree = st.text_input("Education Degree")
             language = st.text_input("Languages")
         with c2:
-            cv_up  = st.file_uploader("CV (PDF)", type=["pdf"])
-            id_up  = st.file_uploader("National ID (image)", type=["jpg","jpeg","png"])
+            cv_up  = file_uploader("CV (PDF)", type=["pdf"])
+            id_up  = file_uploader("National ID (image)", type=["jpg","jpeg","png"])
             national_id_no = st.number_input("National ID No", min_value=0)
             email = st.text_input("Email")
             ss_registration_date = st.date_input("SS Registration Date", value=TODAY,
@@ -101,7 +102,7 @@ with tab_add:
             assurance = st.number_input("Assurance", min_value=0.0, step=1000.0)
             assurance_state = st.selectbox("Assurance State", ["active","repaid"])
             employee_state  = st.selectbox("Employee State", ["active","resigned","terminated"])
-            photo_up = st.file_uploader("Profile Photo", type=["jpg","jpeg","png"])
+            photo_up = file_uploader("Profile Photo", type=["jpg","jpeg","png"])
 
         if st.form_submit_button("Add"):
             if not fullname.strip() or basicsalary <= 0:
@@ -123,35 +124,31 @@ with tab_add:
             add_employee_with_salary(emp, basicsalary)
             st.success("Employee added – files stored in Supabase!")
 
-# ========== EDIT (unchanged from previous script) ============================
-# ... keep the edit tab logic exactly as before ...
+# ---------------------- EDIT TAB (unchanged) --------------------
+#  (Keep same as previous script, but replace every st.file_uploader with file_uploader)
 
-# ========== VIEW / SEARCH ====================================================
+# ---------------------- VIEW / SEARCH TAB -----------------------
 with tab_view:
-    q  = st.text_input("🔍  Search employee (name / email / phone)")
+    q = st.text_input("🔍  Search employee (name / email / phone)")
     df = search_employees(q) if q else get_all_employees()
-    if df.empty(): st.info("No matches."); st.stop()
+    if df.empty:
+        st.info("No matches."); st.stop()
 
     sal_map = pd.read_sql("""SELECT employeeid,salary
-                             FROM hr_salary_history
-                             WHERE effective_to IS NULL""",
+                             FROM hr_salary_history WHERE effective_to IS NULL""",
                           engine).set_index("employeeid")["salary"].to_dict()
-
     st.session_state.setdefault("emp_sel", None)
 
-    def show_img(url, width=90):
+    def show_img(url, w=90):
         if url and urllib.parse.urlparse(url).scheme in ("http","https"):
-            st.image(url, width=width)
+            st.image(url, width=w)
         else:
-            st.image(f"https://placehold.co/{width}x{width}.png?text=No+Photo", width=width)
+            st.image(f"https://placehold.co/{w}x{w}.png?text=No+Photo", width=w)
 
-    # NEW: extract filename & pass to download_button
     def file_dl(label, url, key):
-        if not url or urllib.parse.urlparse(url).scheme not in ("http","https"):
-            return
-        # strip query string to get clean filename
-        fname = posixpath.basename(urllib.parse.urlparse(url).path) or 'download'
-        st.download_button(label, url, file_name=fname, key=key)
+        if url and urllib.parse.urlparse(url).scheme in ("http","https"):
+            fname = posixpath.basename(urllib.parse.urlparse(url).path) or "download"
+            st.download_button(label, url, file_name=fname, key=key)
 
     list_col, detail_col = st.columns([2,3], gap="large")
 
@@ -191,7 +188,8 @@ with tab_view:
                     "SS registration": r.ss_registration_date,
                 }
                 st.markdown("### Profile")
-                for k, v in info.items(): st.markdown(f"**{k}:** {v or '-'}")
+                for k, v in info.items():
+                    st.markdown(f"**{k}:** {v or '-'}")
 
             st.markdown("---")
             file_dl("📄 Download CV", r.cv_url, f"cv_{sel}")
