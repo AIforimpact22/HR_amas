@@ -227,50 +227,58 @@ with tab_edit:
             st.success("Employee data updated (salary unchanged).")
 
 
-# ---------- VIEW / SEARCH  (CARD + DETAILS) ----------
+# ---------- VIEW / SEARCH  (CARD LIST + DETAILS) ----------
+import base64, io
+
 with tab_view:
 
     # ░░ SEARCH BAR ░░
     q = st.text_input("🔍  Search employee (name / email / phone)")
 
-    # ░░ FETCH DATA ░░
+    # ░░ QUERY DB ░░
     df = search_employees(q) if q else get_all_employees()
     if df.empty:
         st.info("No matches.")
         st.stop()
 
-    # map of current salaries
+    # salaries map
     sal_map = (
         pd.read_sql(
-            "SELECT employeeid, salary FROM hr_salary_history WHERE effective_to IS NULL",
+            "SELECT employeeid, salary "
+            "FROM hr_salary_history WHERE effective_to IS NULL",
             engine,
         )
         .set_index("employeeid")["salary"]
         .to_dict()
     )
 
-    # ensure a selected-id key exists
+    # ensure key for selection
     st.session_state.setdefault("emp_sel", None)
 
-    # ░░ THUMBNAIL CARD LIST ░░
+    # helper: render an image (local path → show, else placeholder)
+    def show_img(path: str, width: int = 60):
+        if path and os.path.exists(path):
+            st.image(path, width=width)
+        else:
+            # remote placeholder (transparent PNG with grey border)
+            st.image(
+                f"https://placehold.co/{width}x{width}.png?text=No+Photo",
+                width=width,
+            )
+
+    # ░░ CARD LIST ░░
     st.markdown("### Results")
     for _, r in df.iterrows():
         eid = int(r.employeeid)
 
-        # one card per employee
         with st.container():
             c1, c2, c3 = st.columns([1, 4, 1], gap="small")
 
-            # --- photo thumb ---
+            # photo thumb
             with c1:
-                img = (
-                    r.photo_url
-                    if r.photo_url and os.path.exists(r.photo_url)
-                    else "static/no_avatar.png"
-                )
-                st.image(img, width=60)
+                show_img(r.photo_url, 60)
 
-            # --- brief info ---
+            # brief info
             with c2:
                 st.markdown(
                     f"**{r.fullname}**  \n"
@@ -279,11 +287,11 @@ with tab_view:
                     help=f"Employee ID {eid}",
                 )
 
-            # --- view button ---
+            # view button
             with c3:
                 if st.button("View", key=f"view_{eid}"):
                     st.session_state.emp_sel = eid
-                    st.experimental_rerun()      # refresh to jump to details
+                    st.experimental_rerun()
 
         st.markdown("---")
 
@@ -291,24 +299,20 @@ with tab_view:
     sel_id = st.session_state.get("emp_sel")
     if sel_id is not None and sel_id in df.employeeid.values:
         row = df[df.employeeid == sel_id].iloc[0]
+
         st.markdown("## Employee Details")
         d1, d2 = st.columns([1, 2], gap="large")
 
-        # left: portrait + quick KPIs
+        # left: portrait + metrics
         with d1:
-            img_big = (
-                row.photo_url
-                if row.photo_url and os.path.exists(row.photo_url)
-                else "static/no_avatar.png"
-            )
-            st.image(img_big, width=180)
+            show_img(row.photo_url, 180)
             st.metric("Current salary",
-                      f"Rp {sal_map.get(sel_id,0):,.0f}")
+                      f"Rp {sal_map.get(sel_id, 0):,.0f}")
             st.metric("Assurance",
                       f"Rp {(row.assurance or 0):,.0f} ({row.assurance_state})")
             st.markdown(f"**Status:** `{row.employee_state}`")
 
-        # right: full info table-style
+        # right: full information
         with d2:
             info = {
                 "Department": row.department,
@@ -343,3 +347,4 @@ with tab_view:
                             file_name=os.path.basename(path),
                             key=f"dl_{label}_{sel_id}",
                         )
+
