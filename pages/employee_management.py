@@ -1,4 +1,4 @@
-# employee_management.py  –  Neon + Supabase Storage (private bucket) + robust fallbacks
+# employee_management.py  –  Neon + Supabase Storage (private bucket) + bug-free dates
 # Requires: streamlit ≥1.27, supabase, sqlalchemy, pandas
 # --------------------------------------------------------------------
 
@@ -6,26 +6,32 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
 from supabase import create_client
-import datetime, mimetypes, uuid, os, requests, urllib.parse
+import datetime, mimetypes, uuid, os, urllib.parse
 
-# ──────────────── GLOBAL CONFIG ────────────────────────────────────
+# ─────────────── GLOBAL CONFIG ────────────────────────────────────
 st.set_page_config("Employee Mgmt", "👥", layout="wide")
 
-# ---------- Supabase (private) ----------
+TODAY      = datetime.date.today()
+PAST_30    = TODAY - datetime.timedelta(days=365 * 30)
+FUTURE_30  = TODAY + datetime.timedelta(days=365 * 30)
+def win(d):                         # helper for edit pages
+    return (min(PAST_30, d), max(FUTURE_30, d)) if d else (PAST_30, FUTURE_30)
+
+# ---------- Supabase (private bucket) ----------
 _SB      = create_client(st.secrets["supabase"]["url"],
                          st.secrets["supabase"]["anon"])
 _BUCKET  = st.secrets["supabase"]["bucket"]
 
 def _upload_to_supabase(file_obj, subfolder: str) -> str | None:
-    """Upload file, return signed URL (7 days) or None."""
+    """Upload file → return 7-day signed URL (or None)."""
     if file_obj is None:
         return None
     ext  = os.path.splitext(file_obj.name)[1] or ""
     key  = f"{subfolder}/{uuid.uuid4().hex}{ext}"
     mime = mimetypes.guess_type(file_obj.name)[0] or "application/octet-stream"
     _SB.storage.from_(_BUCKET).upload(key, file_obj, {"content-type": mime})
-    url  = _SB.storage.from_(_BUCKET).create_signed_url(key, 60*60*24*7)
-    return url["signedURL"]
+    signed = _SB.storage.from_(_BUCKET).create_signed_url(key, 60 * 60 * 24 * 7)
+    return signed["signedURL"]
 
 # ---------- PostgreSQL ----------
 if "pg_engine" not in st.session_state:
@@ -76,55 +82,60 @@ def search_employees(term: str):
     """)
     return pd.read_sql(sql, engine, params={"s": f"%{term}%"})
 
-# ---------- DATE UTIL ----------
-TODAY = datetime.date.today()
-PAST_30 = TODAY - datetime.timedelta(days=365*30)
-FUTURE_30 = TODAY + datetime.timedelta(days=365*30)
-win = lambda d: (min(PAST_30, d), max(FUTURE_30, d)) if d else (PAST_30, FUTURE_30)
-
-# ───────────── TABS ────────────────────────────────────────────────
+# ───────────── UI TABS ───────────────────────────────────────────
 tab_add, tab_edit, tab_view = st.tabs(["➕ Add", "📝 Edit", "🔎 Search"])
 
-# ==================================================================
+# =================================================================
 # ➕ ADD
-# ==================================================================
+# =================================================================
 with tab_add:
     with st.form("add"):
         c1, c2 = st.columns(2)
-        # --- left ---
+
+        # left
         with c1:
-            fullname = st.text_input("Full Name *")
-            department = st.text_input("Department")
-            position = st.text_input("Position")
-            phone_no = st.text_input("Phone")
-            emergency_phone_no = st.text_input("Emergency Phone")
+            fullname         = st.text_input("Full Name *")
+            department       = st.text_input("Department")
+            position         = st.text_input("Position")
+            phone_no         = st.text_input("Phone")
+            emergency_phone_no  = st.text_input("Emergency Phone")
             supervisor_phone_no = st.text_input("Supervisor Phone")
-            address = st.text_area("Address")
-            date_of_birth = st.date_input("Date of Birth *", PAST_30, FUTURE_30)
-            employment_date = st.date_input("Employment Date *", PAST_30, FUTURE_30)
-            basicsalary = st.number_input("Basic Salary *", min_value=0.0, step=1000.0)
+            address          = st.text_area("Address")
+            date_of_birth    = st.date_input("Date of Birth *",
+                                             value=TODAY,
+                                             min_value=PAST_30,
+                                             max_value=TODAY)
+            employment_date  = st.date_input("Employment Date *",
+                                             value=TODAY,
+                                             min_value=PAST_30,
+                                             max_value=TODAY)
+            basicsalary      = st.number_input("Basic Salary *", min_value=0.0, step=1000.0)
             health_condition = st.text_input("Health Condition")
-            family_members = st.number_input("Family Members", min_value=0)
+            family_members   = st.number_input("Family Members", min_value=0)
             education_degree = st.text_input("Education Degree")
-            language = st.text_input("Languages")
-        # --- right ---
+            language         = st.text_input("Languages")
+
+        # right
         with c2:
-            cv_up = st.file_uploader("CV (PDF)", type=["pdf"])
-            id_up = st.file_uploader("National ID (image)", type=["jpg", "jpeg", "png"])
+            cv_up  = st.file_uploader("CV (PDF)", type=["pdf"])
+            id_up  = st.file_uploader("National ID (image)", type=["jpg","jpeg","png"])
             national_id_no = st.number_input("National ID No", min_value=0)
-            email = st.text_input("Email")
-            ss_registration_date = st.date_input("SS Registration Date", PAST_30, FUTURE_30)
-            assurance = st.number_input("Assurance", min_value=0.0, step=1000.0)
-            assurance_state = st.selectbox("Assurance State", ["active", "repaid"])
-            employee_state = st.selectbox("Employee State", ["active", "resigned", "terminated"])
-            photo_up = st.file_uploader("Profile Photo", type=["jpg", "jpeg", "png"])
+            email  = st.text_input("Email")
+            ss_registration_date = st.date_input("SS Registration Date",
+                                                 value=TODAY,
+                                                 min_value=PAST_30,
+                                                 max_value=TODAY)
+            assurance       = st.number_input("Assurance", min_value=0.0, step=1000.0)
+            assurance_state = st.selectbox("Assurance State", ["active","repaid"])
+            employee_state  = st.selectbox("Employee State", ["active","resigned","terminated"])
+            photo_up        = st.file_uploader("Profile Photo", type=["jpg","jpeg","png"])
 
         if st.form_submit_button("Add"):
-            required = []
-            if not fullname.strip(): required.append("Full Name")
-            if basicsalary <= 0: required.append("Basic Salary")
-            if required:
-                st.error("Missing: " + ", ".join(required)); st.stop()
+            missing = []
+            if not fullname.strip(): missing.append("Full Name")
+            if basicsalary <= 0:     missing.append("Basic Salary")
+            if missing:
+                st.error("Missing: " + ", ".join(missing)); st.stop()
 
             emp_payload = dict(
                 fullname=fullname, department=department, position=position,
@@ -138,14 +149,14 @@ with tab_add:
                 education_degree=education_degree, language=language,
                 ss_registration_date=ss_registration_date, assurance=assurance,
                 assurance_state=assurance_state, employee_state=employee_state,
-                photo_url=_upload_to_supabase(photo_up, "photo")
+                photo_url=_upload_to_supabase(photo_up, "photo"),
             )
             add_employee_with_salary(emp_payload, basicsalary)
-            st.success("Employee added! Signed URLs valid 7 days.")
+            st.success("Employee added! (Supabase URLs valid 7 days.)")
 
-# ==================================================================
+# =================================================================
 # 📝 EDIT
-# ==================================================================
+# =================================================================
 with tab_edit:
     df = get_all_employees()
     if df.empty:
@@ -157,36 +168,47 @@ with tab_edit:
 
     with st.form("edit"):
         c1, c2 = st.columns(2)
-        # --- left ---
+
+        # left
         with c1:
-            fullname = st.text_input("Full Name", row.fullname)
-            department = st.text_input("Department", row.department or "")
-            position = st.text_input("Position", row.position or "")
-            phone_no = st.text_input("Phone", row.phone_no or "")
-            emergency_phone_no = st.text_input("Emergency Phone", row.emergency_phone_no or "")
+            fullname         = st.text_input("Full Name", row.fullname)
+            department       = st.text_input("Department", row.department or "")
+            position         = st.text_input("Position", row.position or "")
+            phone_no         = st.text_input("Phone", row.phone_no or "")
+            emergency_phone_no  = st.text_input("Emergency Phone", row.emergency_phone_no or "")
             supervisor_phone_no = st.text_input("Supervisor Phone", row.supervisor_phone_no or "")
-            address = st.text_area("Address", row.address or "")
-            date_of_birth = st.date_input("DOB", row.date_of_birth, *win(row.date_of_birth))
-            employment_date = st.date_input("Employment Date", row.employment_date, *win(row.employment_date))
+            address          = st.text_area("Address", row.address or "")
+            date_of_birth    = st.date_input("DOB",
+                                             value=row.date_of_birth,
+                                             min_value=PAST_30,
+                                             max_value=FUTURE_30)
+            employment_date  = st.date_input("Employment Date",
+                                             value=row.employment_date,
+                                             min_value=PAST_30,
+                                             max_value=FUTURE_30)
             st.number_input("Salary (read-only – use Raise/Cut page)",
                             value=float(row.basicsalary), disabled=True)
             health_condition = st.text_input("Health Condition", row.health_condition or "")
-            family_members = st.number_input("Family Members", value=int(row.family_members or 0))
+            family_members   = st.number_input("Family Members", value=int(row.family_members or 0))
             education_degree = st.text_input("Education Degree", row.education_degree or "")
-            language = st.text_input("Languages", row.language or "")
-        # --- right ---
+            language         = st.text_input("Languages", row.language or "")
+
+        # right
         with c2:
             national_id_no = st.number_input("National ID No", value=int(row.national_id_no or 0))
-            email = st.text_input("Email", row.email or "")
-            ss_registration_date = st.date_input("SS Registration", row.ss_registration_date, *win(row.ss_registration_date))
+            email  = st.text_input("Email", row.email or "")
+            ss_registration_date = st.date_input("SS Registration",
+                                                 value=row.ss_registration_date,
+                                                 min_value=PAST_30,
+                                                 max_value=FUTURE_30)
             assurance = st.number_input("Assurance", value=float(row.assurance or 0), step=1000.0)
             assurance_state = st.selectbox("Assurance State", ["active","repaid"],
                                            index=["active","repaid"].index(row.assurance_state))
-            employee_state = st.selectbox("Employee State", ["active","resigned","terminated"],
-                                          index=["active","resigned","terminated"].index(row.employee_state))
+            employee_state  = st.selectbox("Employee State", ["active","resigned","terminated"],
+                                           index=["active","resigned","terminated"].index(row.employee_state))
             st.markdown("*Replace attachments (optional)*")
-            cv_up = st.file_uploader("New CV", type=["pdf"])
-            id_up = st.file_uploader("New ID image", type=["jpg","jpeg","png"])
+            cv_up    = st.file_uploader("New CV",   type=["pdf"])
+            id_up    = st.file_uploader("New ID image", type=["jpg","jpeg","png"])
             photo_up = st.file_uploader("New Photo", type=["jpg","jpeg","png"])
 
         if st.form_submit_button("Update"):
@@ -203,50 +225,37 @@ with tab_edit:
                 education_degree=education_degree, language=language,
                 ss_registration_date=ss_registration_date, assurance=assurance,
                 assurance_state=assurance_state, employee_state=employee_state,
-                photo_url=_upload_to_supabase(photo_up, "photo") or row.photo_url
+                photo_url=_upload_to_supabase(photo_up, "photo") or row.photo_url,
             )
             st.success("Employee updated! New uploads saved to Supabase.")
 
-# ==================================================================
+# =================================================================
 # 🔎 VIEW / SEARCH
-# ==================================================================
+# =================================================================
 with tab_view:
-
-    # --- search ---
-    q = st.text_input("🔍  Search employee (name, email, phone)")
+    q  = st.text_input("🔍  Search employee (name, email, phone)")
     df = search_employees(q) if q else get_all_employees()
     if df.empty:
         st.info("No matches."); st.stop()
 
-    # --- salary map ---
     sal_map = pd.read_sql(
         "SELECT employeeid, salary FROM hr_salary_history WHERE effective_to IS NULL",
         engine).set_index("employeeid")["salary"].to_dict()
 
     st.session_state.setdefault("emp_sel", None)
 
-    # helper: robust image rendering
     def show_img(url: str | None, width: int = 90):
         if url and urllib.parse.urlparse(url).scheme in ("http", "https"):
-            st.image(url, width=width)
-        elif url and os.path.exists(url):
             st.image(url, width=width)
         else:
             st.image(f"https://placehold.co/{width}x{width}.png?text=No+Photo", width=width)
 
-    # helper: robust download button
     def file_dl(label: str, url: str | None, key: str):
-        if not url:
-            return
-        if urllib.parse.urlparse(url).scheme in ("http", "https"):
+        if url and urllib.parse.urlparse(url).scheme in ("http", "https"):
             st.download_button(label, url, key=key)
-        elif os.path.exists(url):
-            with open(url, "rb") as f:
-                st.download_button(label, f, file_name=os.path.basename(url), key=key)
 
     list_col, detail_col = st.columns([2, 3], gap="large")
 
-    # --- LEFT LIST ---
     with list_col:
         st.markdown("### Results")
         for _, r in df.iterrows():
@@ -260,7 +269,6 @@ with tab_view:
                     st.session_state.emp_sel = eid
             st.write("")
 
-    # --- RIGHT DETAIL ---
     with detail_col:
         sel_id = st.session_state.emp_sel
         if sel_id is None:
