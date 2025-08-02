@@ -227,21 +227,19 @@ with tab_edit:
             st.success("Employee data updated (salary unchanged).")
 
 
-# ---------- VIEW / SEARCH  (CARD LIST + DETAILS) ----------
-import base64, io
-
+# ---------- VIEW / SEARCH  (CARD LIST → DETAILS) ----------
 with tab_view:
 
-    # ░░ SEARCH BAR ░░
-    q = st.text_input("🔍  Search employee (name / email / phone)")
+    # ░░ 1 | Search bar ░░
+    q = st.text_input("🔍 Search employee (name / email / phone)")
 
-    # ░░ QUERY DB ░░
+    # ░░ 2 | Fetch rows ░░
     df = search_employees(q) if q else get_all_employees()
     if df.empty:
         st.info("No matches.")
         st.stop()
 
-    # salaries map
+    # map of current salaries
     sal_map = (
         pd.read_sql(
             "SELECT employeeid, salary "
@@ -252,33 +250,32 @@ with tab_view:
         .to_dict()
     )
 
-    # ensure key for selection
-    st.session_state.setdefault("emp_sel", None)
+    # remember selection across rerenders
+    sel_key = "emp_sel"
+    if sel_key not in st.session_state:
+        st.session_state[sel_key] = None
+    selected_id = st.session_state[sel_key]
 
-    # helper: render an image (local path → show, else placeholder)
+    # helper ─ show photo or placeholder
     def show_img(path: str, width: int = 60):
         if path and os.path.exists(path):
             st.image(path, width=width)
         else:
-            # remote placeholder (transparent PNG with grey border)
-            st.image(
+            st.image(  # remote placeholder
                 f"https://placehold.co/{width}x{width}.png?text=No+Photo",
                 width=width,
             )
 
-    # ░░ CARD LIST ░░
+    # ░░ 3 | Thumbnail card list ░░
     st.markdown("### Results")
     for _, r in df.iterrows():
         eid = int(r.employeeid)
-
         with st.container():
             c1, c2, c3 = st.columns([1, 4, 1], gap="small")
 
-            # photo thumb
             with c1:
                 show_img(r.photo_url, 60)
 
-            # brief info
             with c2:
                 st.markdown(
                     f"**{r.fullname}**  \n"
@@ -287,48 +284,47 @@ with tab_view:
                     help=f"Employee ID {eid}",
                 )
 
-            # view button
             with c3:
+                # pressing the button sets selection in session state
                 if st.button("View", key=f"view_{eid}"):
-                    st.session_state.emp_sel = eid
-                    st_rerun()
+                    selected_id = eid
+                    st.session_state[sel_key] = eid
 
         st.markdown("---")
 
-    # ░░ DETAILS PANEL ░░
-    sel_id = st.session_state.get("emp_sel")
-    if sel_id is not None and sel_id in df.employeeid.values:
-        row = df[df.employeeid == sel_id].iloc[0]
+    # ░░ 4 | Details panel ░░
+    if selected_id is not None and selected_id in df.employeeid.values:
+        r = df.loc[df.employeeid == selected_id].iloc[0]
 
         st.markdown("## Employee Details")
         d1, d2 = st.columns([1, 2], gap="large")
 
-        # left: portrait + metrics
+        # left column – photo + quick KPIs
         with d1:
-            show_img(row.photo_url, 180)
+            show_img(r.photo_url, 180)
             st.metric("Current salary",
-                      f"Rp {sal_map.get(sel_id, 0):,.0f}")
+                      f"Rp {sal_map.get(selected_id, 0):,.0f}")
             st.metric("Assurance",
-                      f"Rp {(row.assurance or 0):,.0f} ({row.assurance_state})")
-            st.markdown(f"**Status:** `{row.employee_state}`")
+                      f"Rp {(r.assurance or 0):,.0f} ({r.assurance_state})")
+            st.markdown(f"**Status:** `{r.employee_state}`")
 
-        # right: full information
+        # right column – full info table style
         with d2:
             info = {
-                "Department": row.department,
-                "Position": row.position,
-                "Phone": row.phone_no,
-                "Email": row.email,
-                "Supervisor phone": row.supervisor_phone_no,
-                "Emergency phone": row.emergency_phone_no,
-                "Date of Birth": row.date_of_birth,
-                "Employment date": row.employment_date,
-                "Languages": row.language,
-                "Education": row.education_degree,
-                "Health condition": row.health_condition,
-                "Family members": row.family_members,
-                "National ID No": row.national_id_no,
-                "Social Security registration": row.ss_registration_date,
+                "Department": r.department,
+                "Position": r.position,
+                "Phone": r.phone_no,
+                "Email": r.email,
+                "Supervisor phone": r.supervisor_phone_no,
+                "Emergency phone": r.emergency_phone_no,
+                "Date of Birth": r.date_of_birth,
+                "Employment date": r.employment_date,
+                "Languages": r.language,
+                "Education": r.education_degree,
+                "Health condition": r.health_condition,
+                "Family members": r.family_members,
+                "National ID No": r.national_id_no,
+                "Social Security registration": r.ss_registration_date,
             }
             for k, v in info.items():
                 st.markdown(f"**{k}:**  {v or '-'}")
@@ -336,8 +332,8 @@ with tab_view:
             st.markdown("---")
             # attachments
             for label, path in [
-                ("📄 Download CV", row.cv_url),
-                ("🪪 Download National ID", row.national_id_image_url),
+                ("📄 Download CV", r.cv_url),
+                ("🪪 Download National ID", r.national_id_image_url),
             ]:
                 if path and os.path.exists(path):
                     with open(path, "rb") as f:
@@ -345,6 +341,5 @@ with tab_view:
                             label,
                             f,
                             file_name=os.path.basename(path),
-                            key=f"dl_{label}_{sel_id}",
+                            key=f"dl_{label}_{selected_id}",
                         )
-
