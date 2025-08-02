@@ -2,3 +2,4 @@ streamlit
 SQLAlchemy
 psycopg2-binary
 pandas
+supabase
