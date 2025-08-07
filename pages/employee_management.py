@@ -1,7 +1,3 @@
-# employee_management.py  –  Neon + Supabase Storage – downloads keep extension
-# Requires: streamlit ≥1.27, supabase-py, sqlalchemy, pandas, requests
-# ------------------------------------------------------------------
-
 import streamlit as st, pandas as pd, datetime, mimetypes, uuid, os, urllib.parse, posixpath, requests   # ① added requests
 from sqlalchemy import create_engine, text
 from supabase import create_client
