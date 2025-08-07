@@ -315,11 +315,11 @@ with tab_edit:
         st.success("Employee updated successfully!  New files (if any) uploaded to Supabase.")
 
 
-# ---------------- TAB 3 · 🔎 Search / Employee Navigator (modal version) -----
+# ---------------- TAB 3 · 🔎 Search / Employee Navigator --------------------
 with tab_view:
     st.markdown("## 👥 Employee Navigator")
 
-    # ── filter bar ----------------------------------------------------------
+    # ── filter bar ---------------------------------------------------------
     f1, f2, f3 = st.columns([4, 3, 3])
     term = f1.text_input("Search", placeholder="Name / phone / email")
 
@@ -330,15 +330,15 @@ with tab_view:
     dept_sel  = f2.multiselect("Department", dept_opts)
     state_sel = f3.multiselect("Status", state_opts, default=["active"])
 
-    # ── apply filters ------------------------------------------------------
+    # ── filtering ----------------------------------------------------------
     df = all_df.copy()
     if term:
-        m = (
+        mask = (
             df.fullname.str.contains(term, case=False, na=False)
             | df.email.str.contains(term, case=False, na=False)
             | df.phone_no.str.contains(term, case=False, na=False)
         )
-        df = df[m]
+        df = df[mask]
     if dept_sel:
         df = df[df.department.isin(dept_sel)]
     if state_sel:
@@ -353,30 +353,97 @@ with tab_view:
     @st.cache_data(show_spinner=False)
     def _latest_sal():
         return pd.read_sql(
-            """SELECT DISTINCT ON (employeeid) employeeid, salary
+            """SELECT DISTINCT ON (employeeid) employeeid,salary
                FROM hr_salary_history
-               ORDER BY employeeid, effective_from DESC""",
+               ORDER BY employeeid,effective_from DESC""",
             engine,
         ).set_index("employeeid")["salary"].to_dict()
-
     sal_map = _latest_sal()
 
-    # ── directory as photo-cards grid -------------------------------------
+    # ── card grid ----------------------------------------------------------
+    import math
     st.markdown("#### Results")
     cards_per_row = 4
     rows = math.ceil(len(df) / cards_per_row)
     iterator = iter(df.itertuples())
 
+    # ---------- helper to open profile UI (modal or inline) ---------------
+    def profile_ui(emp_row):
+        eid = int(emp_row.employeeid)
+        photo = emp_row.photo_url or "https://placehold.co/200x200.png?text=No+Photo"
+
+        # header
+        hdr_l, hdr_r = st.columns([1, 2], gap="large")
+        with hdr_l:
+            st.image(photo, width=200)
+        with hdr_r:
+            st.markdown(f"### {emp_row.fullname}")
+            st.markdown(f"**Dept / Pos:** {emp_row.department or '-'} / {emp_row.position or '-'}")
+            st.markdown(f"**Phone:** {emp_row.phone_no or '-'} • **Email:** {emp_row.email or '-'}")
+            st.markdown(f"**Status:** `{emp_row.employee_state}`")
+            st.metric("Current salary", f"Rp {sal_map.get(eid,0):,.0f}")
+
+        act1, act2 = st.columns(2)
+        if act1.button("✏️ Edit", key=f"edit_{eid}"):
+            st.switch_page("pages/employee_management.py")
+        if act2.button("⬆️ Raise / Cut", key=f"raise_{eid}"):
+            st.switch_page("pages/employee_salary.py")
+
+        st.divider()
+
+        # Bio
+        with st.expander("📑 Bio / Employment", expanded=True):
+            bio = {
+                "Date of Birth": emp_row.date_of_birth,
+                "Employment Date": emp_row.employment_date,
+                "Languages": emp_row.language,
+                "Education": emp_row.education_degree,
+                "Health": emp_row.health_condition,
+                "Family Members": emp_row.family_members,
+                "National ID No": emp_row.national_id_no,
+                "SS Registration": emp_row.ss_registration_date,
+                "Assurance": f"Rp {(emp_row.assurance or 0):,.0f} ({emp_row.assurance_state})",
+                "Address": emp_row.address,
+            }
+            for k, v in bio.items():
+                st.markdown(f"**{k}:** {v or '-'}")
+
+        # Salary history
+        with st.expander("💰 Salary history"):
+            hist = pd.read_sql(
+                text(
+                    "SELECT salary,effective_from,effective_to "
+                    "FROM hr_salary_history "
+                    "WHERE employeeid=:eid "
+                    "ORDER BY effective_from DESC"
+                ),
+                engine,
+                params={"eid": eid},
+            )
+            if hist.empty:
+                st.info("No records.")
+            else:
+                hist = hist.copy()
+                hist.loc[:, "effective_to"]   = hist["effective_to"].fillna("Present").astype(str)
+                hist.loc[:, "effective_from"] = hist["effective_from"].astype(str)
+                st.dataframe(hist, hide_index=True, use_container_width=True)
+
+        # Files
+        with st.expander("📎 Files"):
+            if emp_row.cv_url:
+                st.link_button("⬇️ CV", emp_row.cv_url)
+            if emp_row.national_id_image_url:
+                st.link_button("⬇️ National ID", emp_row.national_id_image_url)
+
+    # ---------- render rows of cards --------------------------------------
     for _ in range(rows):
         cols = st.columns(cards_per_row, gap="small")
         for col in cols:
             try:
                 r = next(iterator)
             except StopIteration:
-                col.empty()
-                continue
+                col.empty(); continue
 
-            eid = int(r.employeeid)
             photo = r.photo_url or "https://placehold.co/120x120.png?text=No+Photo"
             col.markdown(
                 f"""
@@ -389,85 +456,13 @@ with tab_view:
                 """,
                 unsafe_allow_html=True,
             )
-            if col.button("👁️ Quick View", key=f"view_{eid}", use_container_width=True):
-                # ---------- MODAL START -----------------------------------
-                with st.modal(f"{r.fullname} — Profile"):
-                    # header
-                    mdl_l, mdl_r = st.columns([1, 2], gap="large")
-                    with mdl_l:
-                        st.image(photo, width=200)
-                    with mdl_r:
-                        st.markdown(f"### {r.fullname}")
-                        st.markdown(
-                            f"**Dept / Pos:** {r.department or '-'} / {r.position or '-'}"
-                        )
-                        st.markdown(
-                            f"**Phone:** {r.phone_no or '-'} &nbsp;&nbsp; "
-                            f"**Email:** {r.email or '-'}"
-                        )
-                        st.markdown(f"**Status:** `{r.employee_state}`")
-                        st.metric(
-                            "Current salary",
-                            f"Rp {sal_map.get(eid, 0):,.0f}",
-                        )
 
-                    # actions
-                    act1, act2 = st.columns(2)
-                    if act1.button("✏️ Edit", key=f"mdl_edit_{eid}"):
-                        st.switch_page("pages/employee_management.py")
-                    if act2.button("⬆️ Raise / Cut", key=f"mdl_raise_{eid}"):
-                        st.switch_page("pages/employee_salary.py")
-
-                    st.divider()
-
-                    # bio
-                    with st.expander("📑 Bio / Employment", expanded=True):
-                        bio = {
-                            "Date of Birth": r.date_of_birth,
-                            "Employment Date": r.employment_date,
-                            "Languages": r.language,
-                            "Education": r.education_degree,
-                            "Health": r.health_condition,
-                            "Family Members": r.family_members,
-                            "National ID No": r.national_id_no,
-                            "SS Registration": r.ss_registration_date,
-                            "Assurance": f"Rp {(r.assurance or 0):,.0f} ({r.assurance_state})",
-                            "Address": r.address,
-                        }
-                        for k, v in bio.items():
-                            st.markdown(f"**{k}:** {v or '-'}")
-
-                    # salary history
-                    with st.expander("💰 Salary history"):
-                        hist = pd.read_sql(
-                            text(
-                                """
-                                SELECT salary, effective_from, effective_to
-                                  FROM hr_salary_history
-                                 WHERE employeeid = :eid
-                                 ORDER BY effective_from DESC
-                                """
-                            ),
-                            engine,
-                            params={"eid": eid},
-                        )
-                        if hist.empty:
-                            st.info("No records.")
-                        else:
-                            hist = hist.copy()
-                            hist.loc[:, "effective_to"] = (
-                                hist["effective_to"]
-                                .fillna("Present")
-                                .astype(str)
-                            )
-                            hist.loc[:, "effective_from"] = hist["effective_from"].astype(str)
-                            st.dataframe(hist, hide_index=True, use_container_width=True)
-
-                    # files
-                    with st.expander("📎 Files"):
-                        if r.cv_url:
-                            st.link_button("⬇️ CV", r.cv_url)
-                        if r.national_id_image_url:
-                            st.link_button("⬇️ National ID", r.national_id_image_url)
-
-                # ---------- MODAL END -------------------------------------
+            if col.button("👁️ Quick View", key=f"view_{r.employeeid}", use_container_width=True):
+                # If modal is available (Streamlit ≥1.31) use it; else fallback to inline expander
+                if hasattr(st, "modal"):
+                    with st.modal(f"{r.fullname} — Profile"):
+                        profile_ui(r)
+                else:
+                    st.write("---")
+                    with st.expander(f"{r.fullname} — Profile (inline view)", expanded=True):
+                        profile_ui(r)
