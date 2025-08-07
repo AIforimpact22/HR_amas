@@ -318,77 +318,169 @@ with tab_edit:
         st.success("Employee updated successfully!  New files (if any) uploaded to Supabase.")
 
 
-# -------------------- VIEW / SEARCH TAB ------------------------
+# -------------------- VIEW / NAV TAB ----------------------------------------
 with tab_view:
-    q = st.text_input("🔍  Search employee (name / email / phone)")
-    df = search_employees(q) if q else get_all_employees()
+    st.subheader("🔎 Employee Navigator")
+
+    # ── filters --------------------------------------------------------------
+    filt_col1, filt_col2, filt_col3 = st.columns([3,2,2])
+    with filt_col1:
+        q = st.text_input("Search (name / email / phone)")
+    with filt_col2:
+        dept_filter = st.selectbox(
+            "Department", ["All"] + sorted(get_all_employees().department.dropna().unique().tolist())
+        )
+    with filt_col3:
+        state_filter = st.selectbox("Status", ["All", "active", "resigned", "terminated"])
+
+    # ── query ----------------------------------------------------------------
+    def _query_emps(term, dept, state):
+        df = get_all_employees()
+        if term:
+            mask = (
+                df.fullname.str.contains(term, case=False, na=False) |
+                df.email.str.contains(term, case=False, na=False)   |
+                df.phone_no.str.contains(term, case=False, na=False)
+            )
+            df = df[mask]
+        if dept != "All":
+            df = df[df.department == dept]
+        if state != "All":
+            df = df[df.employee_state == state]
+        return df.sort_values("fullname")
+
+    df = _query_emps(q.strip(), dept_filter, state_filter)
+
     if df.empty:
-        st.info("No matches."); st.stop()
+        st.info("No matches.")
+        st.stop()
 
-    sal_map = pd.read_sql("""SELECT employeeid,salary FROM hr_salary_history WHERE effective_to IS NULL""",
-                          engine).set_index("employeeid")["salary"].to_dict()
-    st.session_state.setdefault("emp_sel", None)
+    # ── salary map (to avoid N + 1) -----------------------------------------
+    @st.cache_data(show_spinner=False)
+    def _latest_salary_map():
+        return pd.read_sql(
+            """SELECT DISTINCT ON (employeeid) employeeid,salary
+                 FROM hr_salary_history
+                ORDER BY employeeid,effective_from DESC""",
+            engine
+        ).set_index("employeeid")["salary"].to_dict()
+    sal_map = _latest_salary_map()
 
-    def show_img(url, w=90):
-        if url and urllib.parse.urlparse(url).scheme in ("http","https"):
-            st.image(url, width=w)
-        else:
-            st.image(f"https://placehold.co/{w}x{w}.png?text=No+Photo", width=w)
+    # ── layout ---------------------------------------------------------------
+    list_col, detail_col = st.columns([1,2], gap="large")
 
-    # ② fetch bytes then feed download_button
-    def file_dl(label, url, key):
-        if not url or urllib.parse.urlparse(url).scheme not in ("http","https"):
-            return
-        try:
-            resp = requests.get(url, timeout=30)
-            resp.raise_for_status()
-            fname = posixpath.basename(urllib.parse.urlparse(url).path) or "download"
-            st.download_button(label, resp.content, file_name=fname, key=key)
-        except requests.RequestException:
-            st.warning(f"Could not fetch {label.lower()}.")
+    # keep selection
+    sel_key = "emp_sel"
+    st.session_state.setdefault(sel_key, int(df.iloc[0].employeeid))
 
-    list_col, detail_col = st.columns([2,3], gap="large")
-
+    # -------- LEFT LIST PANEL ----------------------------------------------
     with list_col:
-        st.markdown("### Results")
-        for _, r in df.iterrows():
+        st.markdown("#### Results")
+        zebra = ["#ffffff", "#f7f9fc"]
+        for i, r in df.iterrows():
             eid = int(r.employeeid)
-            with st.container(border=True):
+            bg = zebra[i % 2]
+            selected = (eid == st.session_state[sel_key])
+
+            with st.container(border=selected):
                 c1, c2 = st.columns([1,3])
-                with c1: show_img(r.photo_url, 70)
-                with c2: st.markdown(f"**{r.fullname}**\n{r.position or '-'} – {r.department or '-'}\n`{r.employee_state}`")
-                if st.button("View", key=f"view_{eid}", use_container_width=True):
-                    st.session_state.emp_sel = eid
-            st.write("")
+                with c1:
+                    st.image(
+                        r.photo_url or "https://placehold.co/60x60.png?text=No+Photo",
+                        width=60,
+                    )
+                with c2:
+                    name_line = f"**{r.fullname}**"
+                    pos_line  = f"{r.position or '-'} – {r.department or '-'}"
+                    st.markdown(f"{name_line}<br/>{pos_line}", unsafe_allow_html=True)
+                    st.caption(f"Status: `{r.employee_state}`")
+
+                # action buttons
+                c3, c4, c5 = st.columns([1,1,1])
+                with c3:
+                    if st.button("👁️", key=f"view_{eid}", help="View details"):
+                        st.session_state[sel_key] = eid
+                with c4:
+                    if st.button("✏️", key=f"edit_{eid}", help="Edit"):
+                        st.session_state[sel_key] = eid
+                        st.switch_page("pages/employee_management.py")  # jumps to Edit tab
+                with c5:
+                    if st.button("⬆️", key=f"raise_{eid}", help="Raise/Cut"):
+                        st.session_state.pay_anchor = datetime.date.today().replace(day=1)
+                        st.switch_page("pages/employee_salary.py")      # jumps to Raise/Cut tab
+
+    # -------- RIGHT DETAIL PANEL -------------------------------------------
+    sel = st.session_state[sel_key]
+    r = df[df.employeeid == sel].iloc[0]
 
     with detail_col:
-        sel = st.session_state.emp_sel
-        if sel and sel in df.employeeid.values:
-            r = df.loc[df.employeeid == sel].iloc[0]
-            st.subheader(r.fullname)
-            c1, c2 = st.columns([1,2], gap="large")
+        # tabbed detail view
+        t_profile, t_salary, t_files = st.tabs(["👤 Profile", "💰 Salary history", "📎 Files"])
 
-            with c1:
-                show_img(r.photo_url, 180)
-                st.metric("Current salary", f"Rp {sal_map.get(sel,0):,.0f}")
-                st.metric("Assurance", f"Rp {(r.assurance or 0):,.0f} ({r.assurance_state})")
+        # --- PROFILE ---
+        with t_profile:
+            p1, p2 = st.columns([1,2])
+            with p1:
+                st.image(
+                    r.photo_url or "https://placehold.co/160x160.png?text=No+Photo",
+                    width=160,
+                )
+            with p2:
+                st.markdown(f"### {r.fullname}")
+                st.markdown(f"**Dept/Pos:** {r.department or '-'} / {r.position or '-'}")
+                st.markdown(f"**Phone:** {r.phone_no or '-'}")
+                st.markdown(f"**Email:** {r.email or '-'}")
+                st.markdown(f"**Supervisor:** {r.supervisor_phone_no or '-'}")
                 st.markdown(f"**Status:** `{r.employee_state}`")
-
-            with c2:
-                info = {
-                    "Department": r.department, "Position": r.position, "Phone": r.phone_no,
-                    "Email": r.email, "Supervisor phone": r.supervisor_phone_no,
-                    "Emergency phone": r.emergency_phone_no, "Date of Birth": r.date_of_birth,
-                    "Employment date": r.employment_date, "Languages": r.language,
-                    "Education": r.education_degree, "Health condition": r.health_condition,
-                    "Family members": r.family_members, "National ID No": r.national_id_no,
-                    "SS registration": r.ss_registration_date,
-                }
-                st.markdown("### Profile")
-                for k, v in info.items(): st.markdown(f"**{k}:** {v or '-'}")
-
+                st.metric("Current salary", f"Rp {sal_map.get(sel,0):,.0f}")
+                st.metric(
+                    "Assurance",
+                    f"Rp {(r.assurance or 0):,.0f} ({r.assurance_state})"
+                )
             st.markdown("---")
-            file_dl("📄 Download CV", r.cv_url,  f"cv_{sel}")
-            file_dl("🪪 Download National ID", r.national_id_image_url, f"id_{sel}")
-        else:
-            st.info("Select an employee from the list to view details.")
+            bio_info = {
+                "Date of Birth": r.date_of_birth,
+                "Employment Date": r.employment_date,
+                "Languages": r.language,
+                "Education": r.education_degree,
+                "Health": r.health_condition,
+                "Family members": r.family_members,
+                "National ID No": r.national_id_no,
+                "SS registration": r.ss_registration_date,
+            }
+            for k, v in bio_info.items():
+                st.markdown(f"**{k}:** {v or '-'}")
+
+        # --- SALARY HISTORY ---
+        with t_salary:
+            hist = pd.read_sql(
+                text("""SELECT salary,effective_from,effective_to
+                          FROM hr_salary_history
+                         WHERE employeeid=:eid
+                         ORDER BY effective_from DESC"""),
+                engine, params={"eid": sel},
+            )
+            if hist.empty:
+                st.info("No salary records.")
+            else:
+                # timeline style
+                for _, h in hist.iterrows():
+                    end = h.effective_to or "Present"
+                    st.markdown(
+                        f"**Rp {h.salary:,.0f}**  \n"
+                        f"<span style='font-size:0.9em'>"
+                        f"{h.effective_from:%Y-%m-%d} → {end}</span>",
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown("---")
+
+        # --- FILES & DOWNLOADS ---
+        with t_files:
+            def file_dl(label, url):
+                if url:
+                    fname = posixpath.basename(urllib.parse.urlparse(url).path) or "download"
+                    st.link_button(f"⬇️ {label}", url, help=f"Download {fname}")
+            file_dl("CV", r.cv_url)
+            file_dl("National ID", r.national_id_image_url)
+            if r.photo_url:
+                st.image(r.photo_url, width=200)
