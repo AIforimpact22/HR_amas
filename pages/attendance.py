@@ -201,50 +201,107 @@ display:flex;flex-direction:column;justify-content:space-between;margin-bottom:1
 <div class="small">NET <span style="color:{net_c};font-weight:600;">{r['net_str']}</span></div>
 </div>""", unsafe_allow_html=True)
 
-# ╔═════════ TAB 2 — LOG HISTORY ═════════════════════════════════
+# ╔═════════ TAB 2 — LOG HISTORY (fixed) ════════════════════════
 with tab_log:
+    # ── employee selector ───────────────────────────────────────
     emp_df = list_employees()
     emp = st.selectbox("Employee", emp_df.fullname, key="log_emp")
     eid = int(emp_df.loc[emp_df.fullname == emp, "employeeid"].iloc[0])
 
+    # ── date-range (robust handling) ────────────────────────────
     today = datetime.date.today()
     start_default = today.replace(day=1)
-    s, e = st.date_input("Range", (start_default, today), key="log_range")
-    if s > e:
-        st.error("Start must be ≤ End"); st.stop()
 
+    raw_range = st.date_input(
+        "Range",
+        (start_default, today),           # keeps the widget in range mode by default
+        key="log_range",
+        max_value=today,
+        min_value=today - datetime.timedelta(days=365),
+    )
+
+    # raw_range may be a single date or a tuple
+    if isinstance(raw_range, tuple) and len(raw_range) == 2:
+        s, e = raw_range
+    else:  # single date fallback
+        s = e = raw_range
+
+    if s > e:
+        st.error("Start must be ≤ End")
+        st.stop()
+
+    # ── fetch log dataframe ─────────────────────────────────────
     d = fetch_range(eid, s, e)
     st.subheader(f"{emp} • {s} → {e}")
+
     if d.empty:
-        st.info("Nothing."); st.stop()
+        st.info("Nothing recorded for this period.")
+        st.stop()
 
-    d["Req IN"]  = d.expected_in.apply(fmt_time)
-    d["Req OUT"] = d.apply(
-        lambda r: "—" if pd.isna(r.expected_in)
-        else (datetime.datetime.combine(r.punch_date, r.expected_in) +
-              datetime.timedelta(hours=r.shift_hours)).strftime("%H:%M"), axis=1)
-    d["Δ"] = d.apply(
-        lambda r: f"{'+' if (m:=int(round((r.hours-r.shift_hours)*60)))>=0 else '−'}"
-                  f"{abs(m)//60:02d}:{abs(m)%60:02d}", axis=1)
+    # ── add derived / formatted columns ─────────────────────────
+    d["Req IN"] = d.expected_in.apply(fmt_time)
+    d["Req OUT"] = d.apply(
+        lambda r: "—"
+        if pd.isna(r.expected_in)
+        else (
+            datetime.datetime.combine(r.punch_date, r.expected_in)
+            + datetime.timedelta(hours=r.shift_hours)
+        ).strftime("%H:%M"),
+        axis=1,
+    )
 
-    st.metric("Total",    f"{d.hours.sum():.2f}")
-    st.metric("Required", f"{d.shift_hours.sum():.2f}")
-    st.metric("Δ",        f"{(d.hours.sum()-d.shift_hours.sum()):+.2f}")
+    def delta_str(row):
+        if pd.isna(row.hours) or pd.isna(row.shift_hours):
+            return "—"
+        minutes = int(round((row.hours - row.shift_hours) * 60))
+        sign = "+" if minutes >= 0 else "−"
+        return f"{sign}{abs(minutes)//60:02d}:{abs(minutes)%60:02d}"
 
+    d["Δ"] = d.apply(delta_str, axis=1)
+
+    # ── summary metrics (skip NaNs safely) ─────────────────────
+    total_hours = d.hours.fillna(0).sum()
+    req_hours   = d.shift_hours.fillna(0).sum()
+    delta_hours = total_hours - req_hours
+
+    st.metric("Total",    f"{total_hours:.2f}")
+    st.metric("Required", f"{req_hours:.2f}")
+    st.metric("Δ",        f"{delta_hours:+.2f}")
+
+    # ── styling helper for dataframe ───────────────────────────
     def sty(row):
-        style = [""]*len(row)
-        if row["Req IN"] != "—":
-            exp = datetime.datetime.strptime(row["Req IN"], "%H:%M").time()
+        style = [""] * len(row)
+        # late IN
+        if row["Req IN"] != "—" and row["IN"] != "—":
+            exp = datetime.datetime.strptime(row["Req IN"], "%H:%M").time()
             act = datetime.datetime.strptime(row["IN"], "%H:%M").time()
-            cut = (datetime.datetime.combine(today, exp) +
-                   datetime.timedelta(minutes=5)).time()
+            cut = (datetime.datetime.combine(today, exp) + datetime.timedelta(minutes=5)).time()
             style[1] = "background-color:#f8d7da;" if act > cut else "background-color:#d1ecf1;"
-        style[-1] = "background-color:#d4edda;" if row["Δ"].startswith("+") else "background-color:#f8d7da;"
+        # Δ cell
+        delta = row["Δ"]
+        if delta.startswith("+"):
+            style[-1] = "background-color:#d4edda;"
+        elif delta.startswith("−"):
+            style[-1] = "background-color:#f8d7da;"
         return style
 
-    show = d[["punch_date","clock_in_str","clock_out_str","Req IN","Req OUT","Δ"]].rename(
-        columns={"punch_date":"Date","clock_in_str":"IN","clock_out_str":"OUT"})
-    st.dataframe(show.style.apply(sty, axis=1), use_container_width=True, hide_index=True)
+    # ── assemble view & show ───────────────────────────────────
+    view = d[
+        ["punch_date", "clock_in_str", "clock_out_str", "Req IN", "Req OUT", "Δ"]
+    ].rename(
+        columns={
+            "punch_date": "Date",
+            "clock_in_str": "IN",
+            "clock_out_str": "OUT",
+        }
+    )
+
+    st.dataframe(
+        view.style.apply(sty, axis=1),
+        use_container_width=True,
+        hide_index=True,
+    )
+
 
 # ╔═════════ TAB 3 — SCHEDULE / SHIFTS ═══════════════════════════
 with tab_sched:
