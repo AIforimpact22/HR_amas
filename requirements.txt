@@ -1,5 +1,7 @@
-streamlit
-SQLAlchemy
+streamlit>=1.31
+SQLAlchemy>=2.0
 psycopg2-binary
-pandas
+pandas>=2.0
+pyarrow>=15.0
 supabase
+requests
