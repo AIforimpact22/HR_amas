@@ -175,75 +175,148 @@ with tab_add:
             "Files stored securely in Supabase."
         )
 
-# ========== EDIT TAB ========================================================
+# ========== EDIT TAB (revamped UI) ===========================================
 with tab_edit:
-    df = get_all_employees()
-    if df.empty:
-        st.info("No employees."); st.stop()
+    df_all = get_all_employees()
+    if df_all.empty:
+        st.info("No employees in database."); st.stop()
 
-    df["label"] = df["fullname"] + " (" + df["email"].fillna("-") + ")"
-    row = df[df.label == st.selectbox("Select employee", df.label)].iloc[0]
+    # — pick employee —
+    df_all["label"] = df_all["fullname"] + " (" + df_all["email"].fillna("-") + ")"
+    sel_label = st.selectbox("Select employee to edit", df_all.label, index=0)
+    row = df_all[df_all.label == sel_label].iloc[0]
     eid = int(row.employeeid)
 
-    with st.form("edit"):
-        c1, c2 = st.columns(2)
-        # left
-        with c1:
-            fullname   = st.text_input("Full Name", row.fullname)
-            department = st.text_input("Department", row.department or "")
-            position   = st.text_input("Position", row.position or "")
-            phone_no   = st.text_input("Phone", row.phone_no or "")
-            emergency_phone_no  = st.text_input("Emergency Phone", row.emergency_phone_no or "")
-            supervisor_phone_no = st.text_input("Supervisor Phone", row.supervisor_phone_no or "")
-            address    = st.text_area("Address", row.address or "")
-            date_of_birth = st.date_input("DOB",
-                                          value=row.date_of_birth,
-                                          min_value=PAST_30,
-                                          max_value=FUTURE_30)
-            employment_date = st.date_input("Employment Date",
-                                            value=row.employment_date,
-                                            min_value=PAST_30,
-                                            max_value=FUTURE_30)
-            st.number_input("Salary (read-only)", value=float(row.basicsalary), disabled=True)
-            health_condition = st.text_input("Health Condition", row.health_condition or "")
-            family_members   = st.number_input("Family Members", value=int(row.family_members or 0))
-            education_degree = st.text_input("Education Degree", row.education_degree or "")
-            language         = st.text_input("Languages", row.language or "")
-        # right
-        with c2:
-            national_id_no = st.number_input("National ID No", value=int(row.national_id_no or 0))
-            email  = st.text_input("Email", row.email or "")
-            ss_registration_date = st.date_input("SS Registration",
-                                                 value=row.ss_registration_date,
-                                                 min_value=PAST_30,
-                                                 max_value=FUTURE_30)
-            assurance = st.number_input("Assurance", value=float(row.assurance or 0), step=1000.0)
-            assurance_state = st.selectbox("Assurance State", ["active","repaid"],
-                                           index=["active","repaid"].index(row.assurance_state))
-            employee_state  = st.selectbox("Employee State", ["active","resigned","terminated"],
-                                           index=["active","resigned","terminated"].index(row.employee_state))
-            st.markdown("*Replace attachments (optional)*")
-            cv_up   = st.file_uploader("New CV", type=["pdf"])
-            id_up   = st.file_uploader("New ID image", type=["jpg","jpeg","png"])
-            photo_up= st.file_uploader("New Photo", type=["jpg","jpeg","png"])
+    # — fetch latest base salary —
+    cur_sal = pd.read_sql(
+        text("""SELECT salary FROM hr_salary_history
+                WHERE employeeid=:eid ORDER BY effective_from DESC LIMIT 1"""),
+        engine, params={"eid": eid}
+    ).squeeze() if not df_all.empty else 0.0
 
-        if st.form_submit_button("Update"):
-            update_employee(
-                eid,
-                fullname=fullname, department=department, position=position,
-                phone_no=phone_no, emergency_phone_no=emergency_phone_no,
-                supervisor_phone_no=supervisor_phone_no, address=address,
-                date_of_birth=date_of_birth, employment_date=employment_date,
-                health_condition=health_condition,
-                cv_url=_upload_to_supabase(cv_up, "cv") or row.cv_url,
-                national_id_image_url=_upload_to_supabase(id_up, "nid") or row.national_id_image_url,
-                national_id_no=national_id_no, email=email, family_members=family_members,
-                education_degree=education_degree, language=language,
-                ss_registration_date=ss_registration_date, assurance=assurance,
-                assurance_state=assurance_state, employee_state=employee_state,
-                photo_url=_upload_to_supabase(photo_up, "photo") or row.photo_url,
-            )
-            st.success("Employee updated – new files uploaded to Supabase!")
+    # — summary card —
+    card_bg = "#1ABC9C20"
+    col_card1, col_card2 = st.columns([1,3])
+    with col_card1:
+        st.image(row.photo_url or f"https://placehold.co/120x120.png?text=No+Photo", width=120)
+    with col_card2:
+        st.markdown(
+            f"""
+            <div style="background:{card_bg};padding:10px;border-radius:6px">
+            <b>{row.fullname}</b><br>
+            Dept/Pos: {row.department or '-'} / {row.position or '-'}<br>
+            Salary: <b>Rp {cur_sal:,.0f}</b> &nbsp;|&nbsp;
+            Assurance: Rp {(row.assurance or 0):,.0f} ({row.assurance_state})<br>
+            Status: <code>{row.employee_state}</code>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("### Edit details")
+
+    # -------------------- FORM --------------------
+    with st.form(f"edit_emp_{eid}"):
+        t_personal, t_employment, t_files = st.tabs(
+            ["👤 Personal & Contact", "💼 Employment & Pay", "📎 Attachments"]
+        )
+
+        # ---------- TAB 1 ----------
+        with t_personal:
+            c1, c2 = st.columns(2)
+            with c1:
+                fullname   = st.text_input("Full Name ＊", row.fullname)
+                department = st.text_input("Department", row.department or "")
+                position   = st.text_input("Position", row.position or "")
+                phone_no   = st.text_input("Phone", row.phone_no or "")
+                email      = st.text_input("Email", row.email or "")
+                address    = st.text_area("Address", row.address or "")
+            with c2:
+                emergency_phone_no  = st.text_input("Emergency Phone", row.emergency_phone_no or "")
+                supervisor_phone_no = st.text_input("Supervisor Phone", row.supervisor_phone_no or "")
+                date_of_birth = st.date_input(
+                    "Date of Birth ＊", value=row.date_of_birth,
+                    min_value=PAST_30, max_value=TODAY
+                )
+                language = st.text_input("Languages", row.language or "")
+                health_condition = st.text_input("Health Condition", row.health_condition or "")
+                family_members   = st.number_input("Family Members", value=int(row.family_members or 0))
+
+        # ---------- TAB 2 ----------
+        with t_employment:
+            c1, c2 = st.columns(2)
+            with c1:
+                employment_date = st.date_input(
+                    "Employment Date ＊", value=row.employment_date,
+                    min_value=PAST_30, max_value=TODAY
+                )
+                st.number_input("Basic Salary (read-only)", value=float(cur_sal), disabled=True)
+                education_degree = st.text_input("Education Degree", row.education_degree or "")
+            with c2:
+                ss_registration_date = st.date_input(
+                    "SS Registration Date", value=row.ss_registration_date,
+                    min_value=PAST_30, max_value=FUTURE_30
+                )
+                assurance = st.number_input("Assurance", min_value=0.0, step=1000.0,
+                                            value=float(row.assurance or 0))
+                assurance_state = st.radio(
+                    "Assurance State", ["active", "repaid"],
+                    index=["active","repaid"].index(row.assurance_state), horizontal=True
+                )
+                employee_state = st.radio(
+                    "Employee State", ["active", "resigned", "terminated"],
+                    index=["active","resigned","terminated"].index(row.employee_state), horizontal=True
+                )
+                national_id_no = st.text_input("National ID No", str(row.national_id_no or ""))
+
+        # ---------- TAB 3 ----------
+        with t_files:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Current Files**")
+                if row.cv_url:
+                    st.link_button("📄 View CV", row.cv_url)
+                if row.national_id_image_url:
+                    st.link_button("🪪 View Nat. ID", row.national_id_image_url)
+                st.image(row.photo_url or "https://placehold.co/150x150.png?text=No+Photo",
+                         width=150, caption="Current Photo")
+            with c2:
+                st.markdown("**Replace (optional)**")
+                cv_up   = st.file_uploader("New CV (PDF)", type=["pdf"])
+                id_up   = st.file_uploader("New National ID (image)", type=["jpg","jpeg","png"])
+                photo_up= st.file_uploader("New Profile Photo", type=["jpg","jpeg","png"])
+                if photo_up: st.image(photo_up, width=150, caption="New Photo Preview")
+
+        # ---------- SUBMIT ----------
+        save = st.form_submit_button("Update Employee", type="primary")
+
+    # ----------------- SAVE LOGIC -----------------
+    if save:
+        required_miss = []
+        if not fullname.strip(): required_miss.append("Full Name")
+        if date_of_birth > TODAY: required_miss.append("Date of Birth")
+        if employment_date > TODAY: required_miss.append("Employment Date")
+        if required_miss:
+            st.error("Please correct: " + ", ".join(required_miss))
+            st.stop()
+
+        update_employee(
+            eid,
+            fullname=fullname, department=department, position=position,
+            phone_no=phone_no, emergency_phone_no=emergency_phone_no,
+            supervisor_phone_no=supervisor_phone_no, address=address,
+            date_of_birth=date_of_birth, employment_date=employment_date,
+            health_condition=health_condition,
+            cv_url=_upload_to_supabase(cv_up, "cv") or row.cv_url,
+            national_id_image_url=_upload_to_supabase(id_up, "nid") or row.national_id_image_url,
+            national_id_no=national_id_no, email=email, family_members=family_members,
+            education_degree=education_degree, language=language,
+            ss_registration_date=ss_registration_date, assurance=assurance,
+            assurance_state=assurance_state, employee_state=employee_state,
+            photo_url=_upload_to_supabase(photo_up, "photo") or row.photo_url,
+        )
+        st.success("Employee updated successfully!  New files (if any) uploaded to Supabase.")
+
 
 # -------------------- VIEW / SEARCH TAB ------------------------
 with tab_view:
