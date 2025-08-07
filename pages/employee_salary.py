@@ -198,7 +198,7 @@ with tab_sum:
 
 
 # ================================================================
-# TAB 2  ▸ Raise / Cut  (streamlined UI)
+# TAB 2  ▸ Raise / Cut  (streamlined UI, bug-fixed)
 # ================================================================
 with tab_raise:
     st.caption(
@@ -219,7 +219,7 @@ with tab_raise:
         emp_name = st.selectbox("Employee", emp_df["fullname"])
         emp_id   = int(emp_df.loc[emp_df["fullname"] == emp_name, "employeeid"].iloc[0])
 
-        # current salary lookup
+        # ── look up current salary ───────────────────────────────
         cur_sql = text("""
             SELECT salary, effective_from
               FROM hr_salary_history
@@ -231,16 +231,18 @@ with tab_raise:
         """)
         with engine.connect() as con:
             cur_row = con.execute(cur_sql, {"eid": emp_id}).fetchone()
-        cur_sal  = float(cur_row.salary)        if cur_row else 0.0
-        cur_from = cur_row.effective_from.date() if cur_row else None
 
-        # ── show current salary card ─────────────────────────────
+        cur_sal  = float(cur_row.salary) if cur_row else 0.0
+        cur_from = cur_row.effective_from if cur_row else None
+
+        # ── info card with current salary ────────────────────────
         card_bg = "#1ABC9C20"   # teal @20 % opacity
+        cur_since = f"(since {cur_from:%Y-%m-%d})" if cur_from else ""
         st.markdown(
             f"""
             <div style="background:{card_bg};padding:10px;border-radius:6px;margin-bottom:8px">
                 <b>Current salary:</b> {cur_sal:,.0f} &nbsp;&nbsp;
-                <span style="font-size:0.9em">(since {cur_from:%Y-%m-%d})</span>
+                <span style="font-size:0.9em">{cur_since}</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -271,7 +273,7 @@ with tab_raise:
 
         reason = st.text_area("Reason (optional)", placeholder="Promotion, adjustment…")
 
-        # ── live delta badge ────────────────────────────────────
+        # ── live delta badge ─────────────────────────────────────
         delta = new_sal - cur_sal
         if delta != 0:
             arrow = "▲" if delta > 0 else "▼"
@@ -282,12 +284,12 @@ with tab_raise:
                 unsafe_allow_html=True,
             )
 
-        # ── save button ────────────────────────────────────────
+        # ── save button ─────────────────────────────────────────
         if st.form_submit_button("Save raise / cut", type="primary"):
             if new_sal <= 0:
                 st.error("Salary must be > 0")
             elif new_sal == cur_sal:
-                st.warning("New salary is identical to current salary — nothing to save.")
+                st.warning("New salary is identical to current salary — nothing saved.")
             else:
                 close_current_and_insert_raise(
                     emp_id, new_sal, eff_first, reason.strip()
@@ -295,7 +297,6 @@ with tab_raise:
                 st.success(f"Saved! New base salary starts {eff_first:%Y-%m-%d}")
                 st.cache_data.clear()
                 st.rerun()
-
 
 # ─── Tab 3: Push to Finance ────────────────────────────────────
 with tab_push:
