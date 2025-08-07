@@ -102,51 +102,68 @@ if "pay_anchor" not in st.session_state:
     st.session_state.pay_anchor = datetime.date.today().replace(day=1)
 
 # ================================================================
-# TAB 1  ▸ Monthly Summary (restored “Edit Adj.” per row)
-# ================================================================
-# ================================================================
-# TAB 1  ▸ Monthly Summary  (salaries-only view)
+# TAB 1  ▸ Monthly Summary  (salary-only, nicer UI)
 # ================================================================
 with tab_sum:
-    # ── pick / store anchor month ────────────────────────────────
-    anchor = st.date_input("Payroll month", st.session_state.pay_anchor,
-                           key="anchor_sum")
-    st.session_state.pay_anchor = anchor
+    # ── choose month (no day component) ──────────────────────────
+    # build a list of "first-of-month" dates, newest first
+    months = pd.date_range(
+        end=datetime.date.today().replace(day=1),
+        periods=24,           # 2 years back; tweak as you like
+        freq="MS"
+    ).to_pydatetime()[::-1]   # newest → oldest
 
-    # ── period info and data fetch ───────────────────────────────
+    anchor = st.selectbox(
+        "Payroll month",
+        months,
+        format_func=lambda d: d.strftime("%B %Y")   # e.g. "August 2025"
+    )
+    st.session_state.pay_anchor = anchor            # keep in session
+
+    # ── period info & data fetch ────────────────────────────────
     start_d, end_d = month_bounds(anchor)
-    days       = (end_d - start_d).days + 1
-    req_hours  = SHIFT_HOURS * (days - 4)        # still needed for Push-to-Finance tab
+    days      = (end_d - start_d).days + 1
+    req_hours = SHIFT_HOURS * (days - 4)            # still needed elsewhere
     st.caption(f"Period **{start_d:%Y-%m-%d} → {end_d:%Y-%m-%d}**")
 
     df = fetch_month(start_d, end_d, req_hours)
 
-    # ── table header  (attendance columns removed) ───────────────
-    widths = [2, 1.4, 1, 1, 1, 1.4, 2, 1]        # 8 columns
+    # ── tiny formatting helpers ─────────────────────────────────
+    fmt  = lambda n: f"{n:,.0f}"         # thousands‐sep int
+    cell = lambda v, bg="#ffffff": (     # wrap any value in a styled <div>
+        f"<div style='background:{bg};padding:4px'>{v}</div>"
+    )
+
+    # ── table header (attendance cols removed) ──────────────────
+    widths = [2, 1.4, 1, 1, 1, 1.4, 2, 1]           # 8 cols
     for lbl, col in zip(
         ["Employee", "Base", "Bonus", "Extra", "Fine", "Net", "Reasons", ""],
         st.columns(widths)
     ):
         col.markdown(f"**{lbl}**")
 
-    # ── rows ─────────────────────────────────────────────────────
-    for _, r in df.iterrows():
-        cols = st.columns(widths)
-        eid  = int(r["employeeid"])
+    # ── data rows with zebra striping ───────────────────────────
+    even_bg = "#f7f9fc"     # light gray-blue
+    odd_bg  = "#ffffff"
 
-        cols[0].markdown(r["fullname"])
-        cols[1].markdown(f"{r['base']:,.0f}")
-        cols[2].markdown(f"{r['bonus']:,.0f}")
-        cols[3].markdown(f"{r['extra']:,.0f}")
-        cols[4].markdown(f"{r['fine']:,.0f}")
-        cols[5].markdown(f"{r['net']:,.0f}")
-        cols[6].markdown(r["reasons"] or "—")
+    for i, r in df.iterrows():
+        row_bg = even_bg if i % 2 == 0 else odd_bg
+        cols   = st.columns(widths)
+        eid    = int(r["employeeid"])
 
-        # edit-adjustment button
+        cols[0].markdown(cell(r["fullname"], row_bg), unsafe_allow_html=True)
+        cols[1].markdown(cell(fmt(r["base" ]), row_bg), unsafe_allow_html=True)
+        cols[2].markdown(cell(fmt(r["bonus"]), row_bg), unsafe_allow_html=True)
+        cols[3].markdown(cell(fmt(r["extra"]), row_bg), unsafe_allow_html=True)
+        cols[4].markdown(cell(fmt(r["fine" ]), row_bg), unsafe_allow_html=True)
+        cols[5].markdown(cell(fmt(r["net"  ]), row_bg), unsafe_allow_html=True)
+        cols[6].markdown(cell(r["reasons"] or "—", row_bg), unsafe_allow_html=True)
+
+        # edit-adjustment button (unchanged)
         if cols[-1].button("✏️", key=f"edit_adj_{eid}", help="Edit bonus / extra / fine"):
             st.session_state["edit_emp"] = eid
 
-        # inline form (unchanged)
+        # inline adjustment form (unchanged)
         if st.session_state.get("edit_emp") == eid:
             with st.form(f"adj_form_{eid}"):
                 kind = st.selectbox("Type", ["bonus", "extra", "fine"], key=f"k{eid}")
@@ -161,7 +178,8 @@ with tab_sum:
                 if cc.form_submit_button("Cancel"):
                     st.session_state.pop("edit_emp", None); st.rerun()
 
-    # ── totals row (salary columns only) ─────────────────────────
+    # ── totals row (highlighted) ────────────────────────────────
+    tot_bg = "#e6f4f1"   # soft teal (matches your accent #1ABC9C)
     tot = {
         "base":  df["base"].sum(),
         "bonus": df["bonus"].sum(),
@@ -170,13 +188,14 @@ with tab_sum:
         "net":   df["net"].sum(),
     }
     row = st.columns(widths)
-    row[0].markdown("**Totals**")
-    row[1].markdown(f"**{tot['base']:,.0f}**")
-    row[2].markdown(f"**{tot['bonus']:,.0f}**")
-    row[3].markdown(f"**{tot['extra']:,.0f}**")
-    row[4].markdown(f"**{tot['fine']:,.0f}**")
-    row[5].markdown(f"**{tot['net']:,.0f}**")
-    row[6].markdown("—")
+    row[0].markdown(cell("<b>Totals</b>", tot_bg), unsafe_allow_html=True)
+    row[1].markdown(cell(f"<b>{fmt(tot['base'])}</b>",  tot_bg), unsafe_allow_html=True)
+    row[2].markdown(cell(f"<b>{fmt(tot['bonus'])}</b>", tot_bg), unsafe_allow_html=True)
+    row[3].markdown(cell(f"<b>{fmt(tot['extra'])}</b>", tot_bg), unsafe_allow_html=True)
+    row[4].markdown(cell(f"<b>{fmt(tot['fine'])}</b>",  tot_bg), unsafe_allow_html=True)
+    row[5].markdown(cell(f"<b>{fmt(tot['net'])}</b>",   tot_bg), unsafe_allow_html=True)
+    row[6].markdown(cell("—", tot_bg), unsafe_allow_html=True)
+
 
 # ─── Tab 2 : Raise / Cut ───────────────────────────────────────
 with tab_raise:
