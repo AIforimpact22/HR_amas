@@ -104,70 +104,70 @@ if "pay_anchor" not in st.session_state:
 # ================================================================
 # TAB 1  ▸ Monthly Summary (restored “Edit Adj.” per row)
 # ================================================================
+# ================================================================
+# TAB 1  ▸ Monthly Summary  (salaries-only view)
+# ================================================================
 with tab_sum:
+    # ── pick / store anchor month ────────────────────────────────
     anchor = st.date_input("Payroll month", st.session_state.pay_anchor,
                            key="anchor_sum")
     st.session_state.pay_anchor = anchor
 
+    # ── period info and data fetch ───────────────────────────────
     start_d, end_d = month_bounds(anchor)
-    days = (end_d - start_d).days + 1
-    req_hours = SHIFT_HOURS * (days - 4)
-
-    st.caption(f"Period **{start_d:%Y‑%m‑%d} → {end_d:%Y‑%m‑%d}** • "
-               f"Required h/emp = {req_hours:.1f}")
+    days       = (end_d - start_d).days + 1
+    req_hours  = SHIFT_HOURS * (days - 4)        # still needed for Push-to-Finance tab
+    st.caption(f"Period **{start_d:%Y-%m-%d} → {end_d:%Y-%m-%d}**")
 
     df = fetch_month(start_d, end_d, req_hours)
 
-    # table header  (note: last column = Edit Adj.)
-    widths = [2,1.4,1,1,1,1.4,1,1,1.2,2,1]
-    for lbl,col in zip(
-        ["Employee","Base","Bonus","Extra","Fine","Net",
-         "Worked","Req.","Δ","Reasons",""],
-        st.columns(widths)):
+    # ── table header  (attendance columns removed) ───────────────
+    widths = [2, 1.4, 1, 1, 1, 1.4, 2, 1]        # 8 columns
+    for lbl, col in zip(
+        ["Employee", "Base", "Bonus", "Extra", "Fine", "Net", "Reasons", ""],
+        st.columns(widths)
+    ):
         col.markdown(f"**{lbl}**")
 
-    # -------- rows --------
+    # ── rows ─────────────────────────────────────────────────────
     for _, r in df.iterrows():
         cols = st.columns(widths)
-        eid = int(r["employeeid"])
+        eid  = int(r["employeeid"])
+
         cols[0].markdown(r["fullname"])
         cols[1].markdown(f"{r['base']:,.0f}")
         cols[2].markdown(f"{r['bonus']:,.0f}")
         cols[3].markdown(f"{r['extra']:,.0f}")
         cols[4].markdown(f"{r['fine']:,.0f}")
         cols[5].markdown(f"{r['net']:,.0f}")
+        cols[6].markdown(r["reasons"] or "—")
 
-        ok = r["worked"] >= r["required"]; bg = "#d4edda" if ok else "#f8d7da"
-        cols[6].markdown(f"<div style='background:{bg};padding:2px'>{r['worked']:.1f}</div>", unsafe_allow_html=True)
-        cols[7].markdown(f"{r['required']:.1f}")
-        cols[8].markdown(f"<div style='background:{bg};padding:2px'>{r['delta']:+.1f}</div>", unsafe_allow_html=True)
-        cols[9].markdown(r["reasons"] or "—")
-
-        # restored Edit button
+        # edit-adjustment button
         if cols[-1].button("✏️", key=f"edit_adj_{eid}", help="Edit bonus / extra / fine"):
             st.session_state["edit_emp"] = eid
 
-        # inline form for bonus / extra / fine
+        # inline form (unchanged)
         if st.session_state.get("edit_emp") == eid:
             with st.form(f"adj_form_{eid}"):
-                kind  = st.selectbox("Type", ["bonus","extra","fine"], key=f"k{eid}")
-                amt   = st.number_input("Amount", 0.0, step=1000.0, key=f"a{eid}")
-                rsn   = st.text_area("Reason", key=f"r{eid}")
-                dt    = st.date_input("Date", datetime.date.today(), key=f"d{eid}")
+                kind = st.selectbox("Type", ["bonus", "extra", "fine"], key=f"k{eid}")
+                amt  = st.number_input("Amount", 0.0, step=1000.0, key=f"a{eid}")
+                rsn  = st.text_area("Reason", key=f"r{eid}")
+                dt   = st.date_input("Date", datetime.date.today(), key=f"d{eid}")
                 sv, cc = st.columns(2)
-                if sv.form_submit_button("Save") and amt>0:
+                if sv.form_submit_button("Save") and amt > 0:
                     add_txn(eid, dt, amt, kind, rsn)
                     st.session_state.pop("edit_emp", None)
                     st.cache_data.clear(); st.rerun()
                 if cc.form_submit_button("Cancel"):
                     st.session_state.pop("edit_emp", None); st.rerun()
 
-    # totals row
+    # ── totals row (salary columns only) ─────────────────────────
     tot = {
-        "base": df["base"].sum(), "bonus": df["bonus"].sum(),
-        "extra": df["extra"].sum(), "fine": df["fine"].sum(),
-        "net": df["net"].sum(), "worked": df["worked"].sum(),
-        "required": req_hours * len(df), "delta": df["delta"].sum()
+        "base":  df["base"].sum(),
+        "bonus": df["bonus"].sum(),
+        "extra": df["extra"].sum(),
+        "fine":  df["fine"].sum(),
+        "net":   df["net"].sum(),
     }
     row = st.columns(widths)
     row[0].markdown("**Totals**")
@@ -176,11 +176,7 @@ with tab_sum:
     row[3].markdown(f"**{tot['extra']:,.0f}**")
     row[4].markdown(f"**{tot['fine']:,.0f}**")
     row[5].markdown(f"**{tot['net']:,.0f}**")
-    bg_tot = "#d4edda" if tot["worked"] >= tot["required"] else "#f8d7da"
-    row[6].markdown(f"<div style='background:{bg_tot};padding:2px'><b>{tot['worked']:.1f}</b></div>", unsafe_allow_html=True)
-    row[7].markdown(f"**{tot['required']:.1f}**")
-    row[8].markdown(f"<div style='background:{bg_tot};padding:2px'><b>{tot['delta']:+.1f}</b></div>", unsafe_allow_html=True)
-    row[9].markdown("—")
+    row[6].markdown("—")
 
 # ─── Tab 2 : Raise / Cut ───────────────────────────────────────
 with tab_raise:
