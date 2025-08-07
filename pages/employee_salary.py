@@ -197,34 +197,105 @@ with tab_sum:
     row[6].markdown(cell("—", tot_bg), unsafe_allow_html=True)
 
 
-# ─── Tab 2 : Raise / Cut ───────────────────────────────────────
+# ================================================================
+# TAB 2  ▸ Raise / Cut  (streamlined UI)
+# ================================================================
 with tab_raise:
-    st.caption("Create a new base‑salary record.  "
-               "The effective date is always set to the **first of the month** you pick.")
+    st.caption(
+        "Create a new base-salary record.  "
+        "The effective date is always set to the **first of the month** you pick."
+    )
 
-    emp_df = pd.read_sql("SELECT employeeid, fullname FROM hr_employee ORDER BY fullname", engine)
+    # ── fetch employee list ──────────────────────────────────────
+    emp_df = pd.read_sql(
+        "SELECT employeeid, fullname FROM hr_employee ORDER BY fullname", engine
+    )
     if emp_df.empty:
         st.warning("No employees in database.")
         st.stop()
 
-    with st.form("raise_form"):
+    with st.form("raise_form", clear_on_submit=False):
+        # ── choose employee ──────────────────────────────────────
         emp_name = st.selectbox("Employee", emp_df["fullname"])
-        emp_id   = int(emp_df.loc[emp_df["fullname"]==emp_name, "employeeid"].iloc[0])
+        emp_id   = int(emp_df.loc[emp_df["fullname"] == emp_name, "employeeid"].iloc[0])
 
-        new_sal  = st.number_input("New monthly salary", min_value=0.0, step=100_000.0)
-        eff_month = st.date_input("Effective month", st.session_state.pay_anchor, help="Choose any day; will snap to 1st")
-        # snap to first‑of‑month
-        eff_first = eff_month.replace(day=1)
+        # current salary lookup
+        cur_sql = text("""
+            SELECT salary, effective_from
+              FROM hr_salary_history
+             WHERE employeeid = :eid
+               AND effective_from <= CURRENT_DATE
+               AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+             ORDER BY effective_from DESC
+             LIMIT 1
+        """)
+        with engine.connect() as con:
+            cur_row = con.execute(cur_sql, {"eid": emp_id}).fetchone()
+        cur_sal  = float(cur_row.salary)        if cur_row else 0.0
+        cur_from = cur_row.effective_from.date() if cur_row else None
 
-        reason   = st.text_area("Reason (optional)")
+        # ── show current salary card ─────────────────────────────
+        card_bg = "#1ABC9C20"   # teal @20 % opacity
+        st.markdown(
+            f"""
+            <div style="background:{card_bg};padding:10px;border-radius:6px;margin-bottom:8px">
+                <b>Current salary:</b> {cur_sal:,.0f} &nbsp;&nbsp;
+                <span style="font-size:0.9em">(since {cur_from:%Y-%m-%d})</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        if st.form_submit_button("Save raise / cut"):
+        # ── side-by-side inputs ─────────────────────────────────
+        c1, c2 = st.columns(2)
+        with c1:
+            new_sal = st.number_input(
+                "New monthly salary",
+                min_value=0.0,
+                step=50_000.0,
+                value=cur_sal,
+            )
+        with c2:
+            # month select (24 months back, newest first)
+            months = pd.date_range(
+                end=datetime.date.today().replace(day=1),
+                periods=24,
+                freq="MS",
+            ).to_pydatetime()[::-1]
+            eff_month = st.selectbox(
+                "Effective month",
+                months,
+                format_func=lambda d: d.strftime("%B %Y"),
+            )
+            eff_first = eff_month.replace(day=1)   # snap to first-of-month
+
+        reason = st.text_area("Reason (optional)", placeholder="Promotion, adjustment…")
+
+        # ── live delta badge ────────────────────────────────────
+        delta = new_sal - cur_sal
+        if delta != 0:
+            arrow = "▲" if delta > 0 else "▼"
+            color = "#28a745" if delta > 0 else "#dc3545"   # green / red
+            st.markdown(
+                f"<span style='background:{color};color:#fff;padding:4px 8px;border-radius:4px'>"
+                f"{arrow} {abs(delta):,.0f}</span>",
+                unsafe_allow_html=True,
+            )
+
+        # ── save button ────────────────────────────────────────
+        if st.form_submit_button("Save raise / cut", type="primary"):
             if new_sal <= 0:
                 st.error("Salary must be > 0")
+            elif new_sal == cur_sal:
+                st.warning("New salary is identical to current salary — nothing to save.")
             else:
-                close_current_and_insert_raise(emp_id, new_sal, eff_first, reason.strip())
-                st.success(f"Saved. New base salary starts {eff_first:%Y‑%m‑%d}")
-                st.cache_data.clear(); st.rerun()
+                close_current_and_insert_raise(
+                    emp_id, new_sal, eff_first, reason.strip()
+                )
+                st.success(f"Saved! New base salary starts {eff_first:%Y-%m-%d}")
+                st.cache_data.clear()
+                st.rerun()
+
 
 # ─── Tab 3: Push to Finance ────────────────────────────────────
 with tab_push:
