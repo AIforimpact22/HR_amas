@@ -298,127 +298,112 @@ with tab_raise:
                 st.cache_data.clear()
                 st.rerun()
 
-# ─── Tab 3: Push to Finance ────────────────────────────────────
+# ================================================================
+# TAB 3  ▸ Push to Finance  (streamlined UI)
+# ================================================================
 with tab_push:
     st.header("📤 Push Monthly Salaries to Finance")
-    # Select month to finalize
-    sel_month = st.date_input(
-        "Select month to finalize",
-        st.session_state.pay_anchor,
-        key="push_month"
+
+    # ── choose month (month-only picker) ─────────────────────────
+    months = pd.date_range(
+        end=datetime.date.today().replace(day=1),
+        periods=24,
+        freq="MS",
+    ).to_pydatetime()[::-1]          # newest → oldest
+    sel_month = st.selectbox(
+        "Payroll month",
+        months,
+        format_func=lambda d: d.strftime("%B %Y"),
+        key="push_month",
     )
     month_first = sel_month.replace(day=1)
     start_d, end_d = month_bounds(month_first)
-    days = (end_d - start_d).days + 1
+    days      = (end_d - start_d).days + 1
     req_hours = SHIFT_HOURS * (days - 4)
 
-    # Check if already pushed for this month
-    check_sql = text("""
-        SELECT COUNT(*) FROM hr_salary_pushed WHERE month = :m
-    """)
+    # ── check if already pushed ─────────────────────────────────
+    check_sql = text("SELECT COUNT(*) FROM hr_salary_pushed WHERE month = :m")
     with engine.connect() as con:
         already_pushed = con.execute(check_sql, {"m": month_first}).scalar() > 0
 
-    st.caption(f"Period **{start_d:%Y‑%m‑%d} → {end_d:%Y‑%m‑%d}** • "
-               f"Required h/emp = {req_hours:.1f} • "
-               f"Month status: {'✅ Already pushed' if already_pushed else '🟡 Not yet pushed'}")
+    # ── status card ─────────────────────────────────────────────
+    card_bg  = "#d4edda" if already_pushed else "#fff3cd"  # green / yellow
+    status   = "✅ Already pushed" if already_pushed else "🟡 Not yet pushed"
+    st.markdown(
+        f"""
+        <div style="background:{card_bg};padding:10px;border-radius:6px;margin-bottom:8px">
+            <b>Period:</b> {start_d:%Y-%m-%d} → {end_d:%Y-%m-%d} &nbsp;&nbsp;
+            <b>Required h/emp:</b> {req_hours:.1f} &nbsp;&nbsp;
+            <b>Status:</b> {status}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # Fetch calculated salaries for this month
+    # ── fetch salary data for the month ────────────────────────
     df = fetch_month(start_d, end_d, req_hours)
 
-    # Get base salary reason (raise/cut note) for each employee as of the first day of month
+    # ── compile notes (raise + adjustments) ────────────────────
     base_reasons = {}
     base_sql = text("""
         SELECT employeeid, reason
-        FROM hr_salary_history
-        WHERE effective_from <= :month
-          AND (effective_to IS NULL OR effective_to >= :month)
+          FROM hr_salary_history
+         WHERE effective_from <= :month
+           AND (effective_to IS NULL OR effective_to >= :month)
     """)
     with engine.connect() as con:
         for row in con.execute(base_sql, {"month": month_first}):
             base_reasons[row.employeeid] = row.reason
 
-    # Prepare notes column: combine raise/cut reason and salary adj. reasons
     notes = []
-    for _, row in df.iterrows():
-        eid = int(row["employeeid"])
-        note_parts = []
-        raise_note = base_reasons.get(eid, "")
-        if raise_note:
-            note_parts.append(f"Raise/Cut: {raise_note}")
-        if row["reasons"]:
-            note_parts.append(f"Adj.: {row['reasons']}")
-        notes.append(" | ".join(note_parts) if note_parts else "")
+    for _, r in df.iterrows():
+        parts = []
+        rn = base_reasons.get(int(r["employeeid"]), "")
+        if rn:
+            parts.append(f"Raise/Cut: {rn}")
+        if r["reasons"]:
+            parts.append(f"Adj.: {r['reasons']}")
+        notes.append(" | ".join(parts) if parts else "")
 
-    # Prepare preview table with totals
-    df_preview = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
-    df_preview["note"] = notes
+    # ── build preview dataframe  ───────────────────────────────
+    df_prev = df[["fullname", "base", "bonus", "extra", "fine", "net"]].copy()
+    df_prev["note"] = notes
 
-    # Add totals row (numeric)
-    totals_row = {
-        "fullname": "Totals",
-        "base": df_preview["base"].sum(),
-        "bonus": df_preview["bonus"].sum(),
-        "extra": df_preview["extra"].sum(),
-        "fine": df_preview["fine"].sum(),
-        "net": df_preview["net"].sum(),
-        "note": ""
-    }
-    df_totals = pd.DataFrame([totals_row])
-    # Concatenate for display
-    df_show = pd.concat([df_preview, df_totals], ignore_index=True)
+    totals = df_prev[["base", "bonus", "extra", "fine", "net"]].sum()
+    df_prev.loc[len(df_prev)] = ["Totals", *totals, ""]   # add totals row
 
+    # ── tiny helpers for zebra striping ────────────────────────
+    fmt  = lambda n: f"{n:,.0f}"
+    cell = lambda v, bg="#ffffff": f"<div style='background:{bg};padding:4px'>{v}</div>"
+    widths = [2, 1.4, 1, 1, 1, 1.4, 3]   # 7 columns (no edit column)
+
+    even_bg = "#f7f9fc"
+    odd_bg  = "#ffffff"
+    teal_bg = "#e6f4f1"                  # totals row
+
+    # ── render table manually for styling ──────────────────────
+    header_labels = ["Employee", "Base", "Bonus", "Extra", "Fine", "Net", "Notes"]
+    for lbl, col in zip(header_labels, st.columns(widths)):
+        col.markdown(f"**{lbl}**")
+
+    for i, r in df_prev.iterrows():
+        bg = teal_bg if r["fullname"] == "Totals" else (even_bg if i % 2 == 0 else odd_bg)
+        cols = st.columns(widths)
+        cols[0].markdown(cell(r["fullname"], bg), unsafe_allow_html=True)
+        for j, key in enumerate(["base", "bonus", "extra", "fine", "net"], start=1):
+            cols[j].markdown(cell(fmt(r[key]), bg), unsafe_allow_html=True)
+        cols[6].markdown(cell(r["note"], bg), unsafe_allow_html=True)
+
+    # ── push logic ─────────────────────────────────────────────
     if already_pushed:
-        st.info("Salaries for this month have already been pushed to finance. Viewing mode only.")
-        pushed = pd.read_sql(
-            text("""
-                SELECT p.*, e.fullname FROM hr_salary_pushed p
-                JOIN hr_employee e ON e.employeeid = p.employeeid
-                WHERE month = :m
-                ORDER BY e.fullname
-            """), engine, params={"m": month_first}
-        )
-        pushed_preview = pushed[["fullname", "base", "bonus", "extra", "fine", "net", "note"]].copy()
-        pushed_totals_row = {
-            "fullname": "Totals",
-            "base": pushed_preview["base"].sum(),
-            "bonus": pushed_preview["bonus"].sum(),
-            "extra": pushed_preview["extra"].sum(),
-            "fine": pushed_preview["fine"].sum(),
-            "net": pushed_preview["net"].sum(),
-            "note": ""
-        }
-        pushed_show = pd.concat([pushed_preview, pd.DataFrame([pushed_totals_row])], ignore_index=True)
-        st.dataframe(pushed_show, hide_index=True)
-        st.caption(
-            f"**Totals:** Base: {pushed_totals_row['base']:,.0f} | "
-            f"Bonus: {pushed_totals_row['bonus']:,.0f} | "
-            f"Extra: {pushed_totals_row['extra']:,.0f} | "
-            f"Fine: {pushed_totals_row['fine']:,.0f} | "
-            f"Net: {pushed_totals_row['net']:,.0f}"
-        )
+        st.info("This month is locked — push already completed.")
     else:
-        st.warning("This will finalize all employee salaries for the selected month. You cannot edit or re-push after this.")
-        st.dataframe(df_show, hide_index=True)
-        st.caption(
-            f"**Totals:** Base: {totals_row['base']:,.0f} | "
-            f"Bonus: {totals_row['bonus']:,.0f} | "
-            f"Extra: {totals_row['extra']:,.0f} | "
-            f"Fine: {totals_row['fine']:,.0f} | "
-            f"Net: {totals_row['net']:,.0f}"
+        st.warning(
+            "Finalizing will lock this month. You cannot edit or re-push after confirmation."
         )
-
         if st.button("Push all to Finance (Finalize)", type="primary"):
             with engine.begin() as con:
                 for idx, row in df.iterrows():
-                    eid = int(row["employeeid"])
-                    base = float(row["base"])
-                    bonus = float(row["bonus"])
-                    extra = float(row["extra"])
-                    fine = float(row["fine"])
-                    net = float(row["net"])
-                    note = notes[idx]
-                    created_by = st.session_state.get("user", "hr")
                     con.execute(
                         text("""
                             INSERT INTO hr_salary_pushed
@@ -427,16 +412,17 @@ with tab_push:
                               (:eid, :month, :base, :bonus, :extra, :fine, :net, :note, :created_by)
                         """),
                         {
-                            "eid": eid,
+                            "eid": int(row["employeeid"]),
                             "month": month_first,
-                            "base": base,
-                            "bonus": bonus,
-                            "extra": extra,
-                            "fine": fine,
-                            "net": net,
-                            "note": note,
-                            "created_by": created_by,
-                        }
+                            "base":  float(row["base"]),
+                            "bonus": float(row["bonus"]),
+                            "extra": float(row["extra"]),
+                            "fine":  float(row["fine"]),
+                            "net":   float(row["net"]),
+                            "note":  notes[idx],
+                            "created_by": st.session_state.get("user", "hr"),
+                        },
                     )
             st.success("Salaries finalized and pushed to finance. This month is now locked.")
-            st.cache_data.clear(); st.rerun()
+            st.cache_data.clear()
+            st.rerun()
