@@ -318,169 +318,181 @@ with tab_edit:
         st.success("Employee updated successfully!  New files (if any) uploaded to Supabase.")
 
 
-# -------------------- VIEW / NAV TAB ----------------------------------------
+# -------------------- NAV / SEARCH TAB (Dashboard concept) -------------------
 with tab_view:
-    st.subheader("🔎 Employee Navigator")
+    st.markdown("## 👥 Employee Dashboard")
 
-    # ── filters --------------------------------------------------------------
-    filt_col1, filt_col2, filt_col3 = st.columns([3,2,2])
-    with filt_col1:
-        q = st.text_input("Search (name / email / phone)")
-    with filt_col2:
-        dept_filter = st.selectbox(
-            "Department", ["All"] + sorted(get_all_employees().department.dropna().unique().tolist())
+    # ───────────────────────── LEFT SIDEBAR ────────────────────────────────
+    with st.sidebar:
+        with st.expander("🔎 Filters", expanded=True):
+            term = st.text_input("Name / phone / email")
+            all_df = get_all_employees()
+
+            dept_opts  = sorted(all_df.department.dropna().unique().tolist())
+            state_opts = ["active", "resigned", "terminated"]
+
+            sel_depts  = st.multiselect("Department", dept_opts)
+            sel_states = st.multiselect("Status", state_opts, default=["active"])
+
+        # quick metrics
+        st.markdown("### 📊 Org Metrics")
+        active_count = len(all_df[all_df.employee_state == "active"])
+        resigned_cnt = len(all_df[all_df.employee_state == "resigned"])
+        terminated_cnt = len(all_df[all_df.employee_state == "terminated"])
+        st.metric("Active employees", active_count)
+        st.metric("Resigned", resigned_cnt)
+        st.metric("Terminated", terminated_cnt)
+
+        # department bar (simple text bar)
+        st.markdown("**Employees by Dept.**")
+        dept_counts = (
+            all_df.groupby("department")["employeeid"].count().sort_values(ascending=False)
         )
-    with filt_col3:
-        state_filter = st.selectbox("Status", ["All", "active", "resigned", "terminated"])
+        for d, n in dept_counts.items():
+            bar = "█" * int(n / dept_counts.max() * 20)
+            st.markdown(f"{d or '-'}: {bar} {n}")
 
-    # ── query ----------------------------------------------------------------
-    def _query_emps(term, dept, state):
-        df = get_all_employees()
-        if term:
-            mask = (
-                df.fullname.str.contains(term, case=False, na=False) |
-                df.email.str.contains(term, case=False, na=False)   |
-                df.phone_no.str.contains(term, case=False, na=False)
-            )
-            df = df[mask]
-        if dept != "All":
-            df = df[df.department == dept]
-        if state != "All":
-            df = df[df.employee_state == state]
-        return df.sort_values("fullname")
+    # ──────────────────────── FILTER + DATA QUERY ──────────────────────────
+    df = all_df.copy()
+    if term:
+        mask = (
+            df.fullname.str.contains(term, case=False, na=False)
+            | df.email.str.contains(term, case=False, na=False)
+            | df.phone_no.str.contains(term, case=False, na=False)
+        )
+        df = df[mask]
 
-    df = _query_emps(q.strip(), dept_filter, state_filter)
+    if sel_depts:
+        df = df[df.department.isin(sel_depts)]
+    if sel_states:
+        df = df[df.employee_state.isin(sel_states)]
 
+    df = df.sort_values("fullname").reset_index(drop=True)
     if df.empty:
-        st.info("No matches.")
-        st.stop()
+        st.warning("No employees match these filters."); st.stop()
 
-    # ── salary map (to avoid N + 1) -----------------------------------------
+    # salary map cached
     @st.cache_data(show_spinner=False)
-    def _latest_salary_map():
+    def _latest_sal():
         return pd.read_sql(
             """SELECT DISTINCT ON (employeeid) employeeid,salary
                  FROM hr_salary_history
                 ORDER BY employeeid,effective_from DESC""",
-            engine
+            engine,
         ).set_index("employeeid")["salary"].to_dict()
-    sal_map = _latest_salary_map()
 
-    # ── layout ---------------------------------------------------------------
-    list_col, detail_col = st.columns([1,2], gap="large")
+    sal_map = _latest_sal()
 
-    # keep selection
-    sel_key = "emp_sel"
-    st.session_state.setdefault(sel_key, int(df.iloc[0].employeeid))
+    # ───────────────────────── CENTER PANE (TABLE) ─────────────────────────
+    # build compact dataframe just for display
+    disp = df[
+        ["employeeid", "fullname", "department", "position", "phone_no", "employee_state"]
+    ].copy()
+    disp["salary"] = disp.employeeid.map(sal_map).fillna(0).astype(int)
 
-    # -------- LEFT LIST PANEL ----------------------------------------------
-    with list_col:
-        st.markdown("#### Results")
-        zebra = ["#ffffff", "#f7f9fc"]
-        for i, r in df.iterrows():
-            eid = int(r.employeeid)
-            bg = zebra[i % 2]
-            selected = (eid == st.session_state[sel_key])
+    disp.rename(
+        columns={
+            "fullname": "Name",
+            "department": "Dept",
+            "position": "Position",
+            "phone_no": "Phone",
+            "employee_state": "Status",
+            "salary": "Salary",
+        },
+        inplace=True,
+    )
 
-            with st.container(border=selected):
-                c1, c2 = st.columns([1,3])
-                with c1:
-                    st.image(
-                        r.photo_url or "https://placehold.co/60x60.png?text=No+Photo",
-                        width=60,
-                    )
-                with c2:
-                    name_line = f"**{r.fullname}**"
-                    pos_line  = f"{r.position or '-'} – {r.department or '-'}"
-                    st.markdown(f"{name_line}<br/>{pos_line}", unsafe_allow_html=True)
-                    st.caption(f"Status: `{r.employee_state}`")
+    # clickable buttons per row
+    disp["View"] = "👁️"
+    disp["Edit"] = "✏️"
 
-                # action buttons
-                c3, c4, c5 = st.columns([1,1,1])
-                with c3:
-                    if st.button("👁️", key=f"view_{eid}", help="View details"):
-                        st.session_state[sel_key] = eid
-                with c4:
-                    if st.button("✏️", key=f"edit_{eid}", help="Edit"):
-                        st.session_state[sel_key] = eid
-                        st.switch_page("pages/employee_management.py")  # jumps to Edit tab
-                with c5:
-                    if st.button("⬆️", key=f"raise_{eid}", help="Raise/Cut"):
-                        st.session_state.pay_anchor = datetime.date.today().replace(day=1)
-                        st.switch_page("pages/employee_salary.py")      # jumps to Raise/Cut tab
+    # keep selection in session
+    sel_key = "emp_sel_dash"
+    st.session_state.setdefault(sel_key, int(disp.iloc[0].employeeid))
 
-    # -------- RIGHT DETAIL PANEL -------------------------------------------
-    sel = st.session_state[sel_key]
-    r = df[df.employeeid == sel].iloc[0]
+    # show table
+    sel_row = st.data_editor(
+        disp,
+        column_config={
+            "View": st.column_config.Column(width="small"),
+            "Edit": st.column_config.Column(width="small"),
+            "Salary": st.column_config.NumberColumn(format="Rp {:,.0f}"),
+        },
+        use_container_width=True,
+        hide_index=True,
+        on_click="View",            # any click selects that row
+        key="emp_table",
+    )
 
-    with detail_col:
-        # tabbed detail view
-        t_profile, t_salary, t_files = st.tabs(["👤 Profile", "💰 Salary history", "📎 Files"])
+    # determine clicked action
+    clicked = st.session_state["emp_table"]["clicked_row"]
+    if clicked is not None:
+        clicked_id = int(disp.iloc[clicked]["employeeid"])
+        st.session_state[sel_key] = clicked_id
 
-        # --- PROFILE ---
-        with t_profile:
-            p1, p2 = st.columns([1,2])
-            with p1:
-                st.image(
-                    r.photo_url or "https://placehold.co/160x160.png?text=No+Photo",
-                    width=160,
-                )
-            with p2:
-                st.markdown(f"### {r.fullname}")
-                st.markdown(f"**Dept/Pos:** {r.department or '-'} / {r.position or '-'}")
-                st.markdown(f"**Phone:** {r.phone_no or '-'}")
-                st.markdown(f"**Email:** {r.email or '-'}")
-                st.markdown(f"**Supervisor:** {r.supervisor_phone_no or '-'}")
-                st.markdown(f"**Status:** `{r.employee_state}`")
-                st.metric("Current salary", f"Rp {sal_map.get(sel,0):,.0f}")
-                st.metric(
-                    "Assurance",
-                    f"Rp {(r.assurance or 0):,.0f} ({r.assurance_state})"
-                )
-            st.markdown("---")
-            bio_info = {
-                "Date of Birth": r.date_of_birth,
-                "Employment Date": r.employment_date,
-                "Languages": r.language,
-                "Education": r.education_degree,
-                "Health": r.health_condition,
-                "Family members": r.family_members,
-                "National ID No": r.national_id_no,
-                "SS registration": r.ss_registration_date,
-            }
-            for k, v in bio_info.items():
-                st.markdown(f"**{k}:** {v or '-'}")
+    # check for button clicks (View / Edit)
+    if "emp_table_button" in st.session_state:
+        btn_info = st.session_state.pop("emp_table_button")
+        row_idx  = btn_info["row_index"]
+        action   = btn_info["column"]
+        emp_id   = int(disp.iloc[row_idx]["employeeid"])
+        st.session_state[sel_key] = emp_id
+        if action == "Edit":
+            st.switch_page("pages/employee_management.py")  # jumps to Edit tab
+        # action == "View" handled by detail card automatically
 
-        # --- SALARY HISTORY ---
-        with t_salary:
-            hist = pd.read_sql(
-                text("""SELECT salary,effective_from,effective_to
-                          FROM hr_salary_history
-                         WHERE employeeid=:eid
-                         ORDER BY effective_from DESC"""),
-                engine, params={"eid": sel},
-            )
-            if hist.empty:
-                st.info("No salary records.")
-            else:
-                # timeline style
-                for _, h in hist.iterrows():
-                    end = h.effective_to or "Present"
-                    st.markdown(
-                        f"**Rp {h.salary:,.0f}**  \n"
-                        f"<span style='font-size:0.9em'>"
-                        f"{h.effective_from:%Y-%m-%d} → {end}</span>",
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown("---")
+    # ──────────────────────── RIGHT PANE (DETAIL CARD) ──────────────────────
+    st.markdown("---")
+    sel_id = st.session_state[sel_key]
+    emp = all_df.set_index("employeeid").loc[sel_id]
 
-        # --- FILES & DOWNLOADS ---
-        with t_files:
-            def file_dl(label, url):
-                if url:
-                    fname = posixpath.basename(urllib.parse.urlparse(url).path) or "download"
-                    st.link_button(f"⬇️ {label}", url, help=f"Download {fname}")
-            file_dl("CV", r.cv_url)
-            file_dl("National ID", r.national_id_image_url)
-            if r.photo_url:
-                st.image(r.photo_url, width=200)
+    detail_left, detail_right = st.columns([1, 2], gap="large")
+    with detail_left:
+        st.image(
+            emp.photo_url or "https://placehold.co/200x200.png?text=No+Photo",
+            width=200,
+        )
+        st.metric("Current salary", f"Rp {sal_map.get(sel_id,0):,.0f}")
+    with detail_right:
+        st.markdown(f"### {emp.fullname}")
+        st.markdown(f"**Department / Position:** {emp.department or '-'} / {emp.position or '-'}")
+        st.markdown(f"**Phone:** {emp.phone_no or '-'} • **Email:** {emp.email or '-'}")
+        st.markdown(f"**Status:** `{emp.employee_state}`")
+        st.markdown(f"**Assurance:** Rp {(emp.assurance or 0):,.0f} ({emp.assurance_state})")
+        bio = {
+            "Date of Birth": emp.date_of_birth,
+            "Employment Date": emp.employment_date,
+            "Languages": emp.language,
+            "Education": emp.education_degree,
+            "Health": emp.health_condition,
+            "Family Members": emp.family_members,
+            "National ID No": emp.national_id_no,
+            "SS Registration": emp.ss_registration_date,
+            "Address": emp.address,
+        }
+        for k, v in bio.items():
+            st.markdown(f"**{k}:** {v or '-'}")
+
+    # salary history inside expander
+    with st.expander("💰 Salary history"):
+        hist = pd.read_sql(
+            text(
+                "SELECT salary,effective_from,effective_to "
+                "FROM hr_salary_history WHERE employeeid=:eid "
+                "ORDER BY effective_from DESC"
+            ),
+            engine,
+            params={"eid": sel_id},
+        )
+        if hist.empty:
+            st.info("No salary history.")
+        else:
+            hist["effective_to"].fillna("Present", inplace=True)
+            st.dataframe(hist, hide_index=True, use_container_width=True)
+
+    # downloads
+    st.markdown("### 📎 Files")
+    if emp.cv_url:
+        st.link_button("⬇️ CV", emp.cv_url)
+    if emp.national_id_image_url:
+        st.link_button("⬇️ National ID", emp.national_id_image_url)
