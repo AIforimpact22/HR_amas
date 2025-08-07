@@ -66,56 +66,114 @@ def search_employees(term):
 # UI
 st.set_page_config("Employee Mgmt", "👥", layout="wide")
 tab_add, tab_edit, tab_view = st.tabs(["➕ Add", "📝 Edit", "🔎 Search"])
-# ---------------------- ADD TAB ---------------------------------
+# ---------------------- ADD TAB (revamped UI) -------------------
 with tab_add:
-    with st.form("add"):
-        c1, c2 = st.columns(2)
-        with c1:
-            fullname = st.text_input("Full Name *")
-            department = st.text_input("Department")
-            position = st.text_input("Position")
-            phone_no = st.text_input("Phone")
-            emergency_phone_no = st.text_input("Emergency Phone")
-            supervisor_phone_no = st.text_input("Supervisor Phone")
-            address = st.text_area("Address")
-            date_of_birth   = st.date_input("Date of Birth *", value=TODAY, min_value=PAST_30, max_value=TODAY)
-            employment_date = st.date_input("Employment Date *", value=TODAY, min_value=PAST_30, max_value=TODAY)
-            basicsalary = st.number_input("Basic Salary *", min_value=0.0, step=1000.0)
-            health_condition = st.text_input("Health Condition")
-            family_members = st.number_input("Family Members", min_value=0)
-            education_degree = st.text_input("Education Degree")
-            language = st.text_input("Languages")
-        with c2:
-            cv_up  = file_uploader("CV (PDF)", type=["pdf"])
-            id_up  = file_uploader("National ID (image)", type=["jpg","jpeg","png"])
-            national_id_no = st.number_input("National ID No", min_value=0)
-            email = st.text_input("Email")
-            ss_registration_date = st.date_input("SS Registration Date", value=TODAY,
-                                                 min_value=PAST_30, max_value=TODAY)
-            assurance = st.number_input("Assurance", min_value=0.0, step=1000.0)
-            assurance_state = st.selectbox("Assurance State", ["active","repaid"])
-            employee_state  = st.selectbox("Employee State", ["active","resigned","terminated"])
-            photo_up = file_uploader("Profile Photo", type=["jpg","jpeg","png"])
+    st.subheader("➕ Add New Employee")
 
-        if st.form_submit_button("Add"):
-            if not fullname.strip() or basicsalary <= 0:
-                st.error("Name and positive salary required."); st.stop()
+    # ── form with sub-tabs --------------------------------------
+    with st.form("add_emp"):
+        t_personal, t_employment, t_files = st.tabs(
+            ["👤 Personal & Contact", "💼 Employment & Pay", "📎 Attachments"]
+        )
 
-            emp = dict(
-                fullname=fullname, department=department, position=position,
-                phone_no=phone_no, emergency_phone_no=emergency_phone_no,
-                supervisor_phone_no=supervisor_phone_no, address=address,
-                date_of_birth=date_of_birth, employment_date=employment_date,
-                health_condition=health_condition,
-                cv_url=_upload_to_supabase(cv_up, "cv"),
-                national_id_image_url=_upload_to_supabase(id_up, "nid"),
-                national_id_no=national_id_no, email=email, family_members=family_members,
-                education_degree=education_degree, language=language,
-                ss_registration_date=ss_registration_date, assurance=assurance,
-                assurance_state=assurance_state, employee_state=employee_state,
-                photo_url=_upload_to_supabase(photo_up, "photo"))
-            add_employee_with_salary(emp, basicsalary)
-            st.success("Employee added – files stored in Supabase!")
+        # ---------- TAB 1 : PERSONAL & CONTACT ----------
+        with t_personal:
+            c1, c2 = st.columns(2)
+            with c1:
+                fullname = st.text_input("Full Name ＊")
+                department = st.text_input("Department")
+                position   = st.text_input("Position")
+                phone_no   = st.text_input("Phone")
+                email      = st.text_input("Email")
+                address    = st.text_area("Address")
+            with c2:
+                emergency_phone_no  = st.text_input("Emergency Phone")
+                supervisor_phone_no = st.text_input("Supervisor Phone")
+                date_of_birth = st.date_input(
+                    "Date of Birth ＊", value=TODAY, min_value=PAST_30, max_value=TODAY
+                )
+                language  = st.text_input("Languages (comma-sep)")
+                health_condition = st.text_input("Health Condition")
+                family_members   = st.number_input("Family Members", min_value=0)
+
+        # ---------- TAB 2 : EMPLOYMENT & PAY ----------
+        with t_employment:
+            c1, c2 = st.columns(2)
+            with c1:
+                employment_date = st.date_input(
+                    "Employment Date ＊",
+                    value=TODAY,
+                    min_value=PAST_30,
+                    max_value=TODAY,
+                )
+                basicsalary = st.number_input(
+                    "Basic Salary ＊",
+                    min_value=0.0,
+                    step=1000.0,
+                    format="%.0f",
+                )
+                education_degree = st.text_input("Education Degree")
+            with c2:
+                ss_registration_date = st.date_input(
+                    "SS Registration Date",
+                    value=TODAY,
+                    min_value=PAST_30,
+                    max_value=TODAY,
+                )
+                assurance = st.number_input("Assurance", min_value=0.0, step=1000.0)
+                assurance_state = st.radio("Assurance State", ["active", "repaid"], horizontal=True)
+                employee_state = st.radio(
+                    "Employee State", ["active", "resigned", "terminated"], horizontal=True
+                )
+                national_id_no = st.text_input("National ID No")
+
+        # ---------- TAB 3 : ATTACHMENTS ----------
+        with t_files:
+            c1, c2 = st.columns(2)
+            with c1:
+                cv_up = file_uploader("CV (PDF)", type=["pdf"])
+                id_up = file_uploader("National ID (image)", type=["jpg", "jpeg", "png"])
+            with c2:
+                photo_up = file_uploader("Profile Photo", type=["jpg", "jpeg", "png"])
+                # live preview
+                if photo_up is not None:
+                    st.image(photo_up, width=150, caption="Preview")
+
+        # ---------- SUBMIT ----------
+        submit = st.form_submit_button("Add Employee", type="primary")
+
+    # ── validation & insert --------------------------------------
+    if submit:
+        missing = []
+        if not fullname.strip():   missing.append("Full Name")
+        if basicsalary <= 0:       missing.append("Basic Salary")
+        if date_of_birth > TODAY:  missing.append("Date of Birth")
+        if employment_date > TODAY:missing.append("Employment Date")
+
+        if missing:
+            st.error("Please complete: " + ", ".join(missing))
+            st.stop()
+
+        emp = dict(
+            fullname=fullname, department=department, position=position,
+            phone_no=phone_no, emergency_phone_no=emergency_phone_no,
+            supervisor_phone_no=supervisor_phone_no, address=address,
+            date_of_birth=date_of_birth, employment_date=employment_date,
+            health_condition=health_condition, cv_url=_upload_to_supabase(cv_up, "cv"),
+            national_id_image_url=_upload_to_supabase(id_up, "nid"),
+            national_id_no=national_id_no, email=email, family_members=family_members,
+            education_degree=education_degree, language=language,
+            ss_registration_date=ss_registration_date, assurance=assurance,
+            assurance_state=assurance_state, employee_state=employee_state,
+            photo_url=_upload_to_supabase(photo_up, "photo"),
+        )
+
+        add_employee_with_salary(emp, basicsalary)
+
+        st.success(
+            f"Employee **{fullname}** added!  "
+            "Files stored securely in Supabase."
+        )
 
 # ========== EDIT TAB ========================================================
 with tab_edit:
