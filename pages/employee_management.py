@@ -318,11 +318,11 @@ with tab_edit:
         st.success("Employee updated successfully!  New files (if any) uploaded to Supabase.")
 
 
-# -------------------- NAV / SEARCH TAB (Dashboard concept) -------------------
+# -------------------- NAV / SEARCH TAB (Dashboard concept – fixed) ----------
 with tab_view:
     st.markdown("## 👥 Employee Dashboard")
 
-    # ───────────────────────── LEFT SIDEBAR ────────────────────────────────
+    # ─────────── LEFT SIDEBAR (Filters + Org metrics) ───────────────────────
     with st.sidebar:
         with st.expander("🔎 Filters", expanded=True):
             term = st.text_input("Name / phone / email")
@@ -334,17 +334,15 @@ with tab_view:
             sel_depts  = st.multiselect("Department", dept_opts)
             sel_states = st.multiselect("Status", state_opts, default=["active"])
 
-        # quick metrics
         st.markdown("### 📊 Org Metrics")
-        active_count = len(all_df[all_df.employee_state == "active"])
-        resigned_cnt = len(all_df[all_df.employee_state == "resigned"])
-        terminated_cnt = len(all_df[all_df.employee_state == "terminated"])
-        st.metric("Active employees", active_count)
+        active_cnt     = (all_df.employee_state == "active").sum()
+        resigned_cnt   = (all_df.employee_state == "resigned").sum()
+        terminated_cnt = (all_df.employee_state == "terminated").sum()
+        st.metric("Active", active_cnt)
         st.metric("Resigned", resigned_cnt)
         st.metric("Terminated", terminated_cnt)
 
-        # department bar (simple text bar)
-        st.markdown("**Employees by Dept.**")
+        st.markdown("**Dept breakdown**")
         dept_counts = (
             all_df.groupby("department")["employeeid"].count().sort_values(ascending=False)
         )
@@ -352,7 +350,7 @@ with tab_view:
             bar = "█" * int(n / dept_counts.max() * 20)
             st.markdown(f"{d or '-'}: {bar} {n}")
 
-    # ──────────────────────── FILTER + DATA QUERY ──────────────────────────
+    # ─────────── APPLY FILTERS ──────────────────────────────────────────────
     df = all_df.copy()
     if term:
         mask = (
@@ -361,7 +359,6 @@ with tab_view:
             | df.phone_no.str.contains(term, case=False, na=False)
         )
         df = df[mask]
-
     if sel_depts:
         df = df[df.department.isin(sel_depts)]
     if sel_states:
@@ -371,7 +368,7 @@ with tab_view:
     if df.empty:
         st.warning("No employees match these filters."); st.stop()
 
-    # salary map cached
+    # cache latest salary map
     @st.cache_data(show_spinner=False)
     def _latest_sal():
         return pd.read_sql(
@@ -380,16 +377,42 @@ with tab_view:
                 ORDER BY employeeid,effective_from DESC""",
             engine,
         ).set_index("employeeid")["salary"].to_dict()
-
     sal_map = _latest_sal()
 
-    # ───────────────────────── CENTER PANE (TABLE) ─────────────────────────
-    # build compact dataframe just for display
-    disp = df[
-        ["employeeid", "fullname", "department", "position", "phone_no", "employee_state"]
-    ].copy()
-    disp["salary"] = disp.employeeid.map(sal_map).fillna(0).astype(int)
+    # ─────────── SELECT TOOLBAR + ACTIONS ───────────────────────────────────
+    toolbar = st.container()
+    with toolbar:
+        sel_key = "emp_sel_dash"
+        st.session_state.setdefault(sel_key, int(df.iloc[0].employeeid))
 
+        name_map = {int(r.employeeid): r.fullname for _, r in df.iterrows()}
+        current_idx = list(name_map.keys()).index(st.session_state[sel_key])
+        sel_id = st.selectbox(
+            "Select employee",
+            options=list(name_map.keys()),
+            format_func=lambda eid: name_map[eid],
+            index=current_idx,
+            key="emp_selectbox",
+        )
+        st.session_state[sel_key] = sel_id
+
+        c_view, c_edit, c_raise = st.columns(3)
+        with c_view:
+            st.button("👁️ View", key="btn_view")  # does nothing, selection already shows
+        with c_edit:
+            if st.button("✏️ Edit"):
+                st.switch_page("pages/employee_management.py")  # jumps to Edit tab
+        with c_raise:
+            if st.button("⬆️ Raise/Cut"):
+                st.switch_page("pages/employee_salary.py")      # jumps to Salary module
+
+    st.divider()
+
+    # ─────────── DIRECTORY TABLE (sortable) ─────────────────────────────────
+    disp = df[
+        ["fullname", "department", "position", "phone_no", "employee_state"]
+    ].copy()
+    disp["salary"] = df.employeeid.map(sal_map).fillna(0).astype(int)
     disp.rename(
         columns={
             "fullname": "Name",
@@ -401,51 +424,18 @@ with tab_view:
         },
         inplace=True,
     )
-
-    # clickable buttons per row
-    disp["View"] = "👁️"
-    disp["Edit"] = "✏️"
-
-    # keep selection in session
-    sel_key = "emp_sel_dash"
-    st.session_state.setdefault(sel_key, int(disp.iloc[0].employeeid))
-
-    # show table
-    sel_row = st.data_editor(
+    st.data_editor(
         disp,
+        hide_index=True,
         column_config={
-            "View": st.column_config.Column(width="small"),
-            "Edit": st.column_config.Column(width="small"),
             "Salary": st.column_config.NumberColumn(format="Rp {:,.0f}"),
         },
         use_container_width=True,
-        hide_index=True,
-        on_click="View",            # any click selects that row
-        key="emp_table",
+        height=min(500, 36 * len(disp) + 40),
     )
 
-    # determine clicked action
-    clicked = st.session_state["emp_table"]["clicked_row"]
-    if clicked is not None:
-        clicked_id = int(disp.iloc[clicked]["employeeid"])
-        st.session_state[sel_key] = clicked_id
-
-    # check for button clicks (View / Edit)
-    if "emp_table_button" in st.session_state:
-        btn_info = st.session_state.pop("emp_table_button")
-        row_idx  = btn_info["row_index"]
-        action   = btn_info["column"]
-        emp_id   = int(disp.iloc[row_idx]["employeeid"])
-        st.session_state[sel_key] = emp_id
-        if action == "Edit":
-            st.switch_page("pages/employee_management.py")  # jumps to Edit tab
-        # action == "View" handled by detail card automatically
-
-    # ──────────────────────── RIGHT PANE (DETAIL CARD) ──────────────────────
-    st.markdown("---")
-    sel_id = st.session_state[sel_key]
+    # ─────────── DETAIL CARD ────────────────────────────────────────────────
     emp = all_df.set_index("employeeid").loc[sel_id]
-
     detail_left, detail_right = st.columns([1, 2], gap="large")
     with detail_left:
         st.image(
@@ -456,9 +446,10 @@ with tab_view:
     with detail_right:
         st.markdown(f"### {emp.fullname}")
         st.markdown(f"**Department / Position:** {emp.department or '-'} / {emp.position or '-'}")
-        st.markdown(f"**Phone:** {emp.phone_no or '-'} • **Email:** {emp.email or '-'}")
+        st.markdown(f"**Phone:** {emp.phone_no or '-'}  •  **Email:** {emp.email or '-'}")
         st.markdown(f"**Status:** `{emp.employee_state}`")
         st.markdown(f"**Assurance:** Rp {(emp.assurance or 0):,.0f} ({emp.assurance_state})")
+
         bio = {
             "Date of Birth": emp.date_of_birth,
             "Employment Date": emp.employment_date,
@@ -473,7 +464,7 @@ with tab_view:
         for k, v in bio.items():
             st.markdown(f"**{k}:** {v or '-'}")
 
-    # salary history inside expander
+    # salary history
     with st.expander("💰 Salary history"):
         hist = pd.read_sql(
             text(
@@ -485,12 +476,12 @@ with tab_view:
             params={"eid": sel_id},
         )
         if hist.empty:
-            st.info("No salary history.")
+            st.info("No salary records.")
         else:
             hist["effective_to"].fillna("Present", inplace=True)
             st.dataframe(hist, hide_index=True, use_container_width=True)
 
-    # downloads
+    # files
     st.markdown("### 📎 Files")
     if emp.cv_url:
         st.link_button("⬇️ CV", emp.cv_url)
